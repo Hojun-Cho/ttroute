@@ -154,7 +154,12 @@ export function trace(req, res) {
   }
 
   // ICMP probes (-I) get much further than UDP ones; Linux needs CAP_NET_RAW for them.
-  const args = ['-I', '-n', '-q', PROBES, '-w', 1, '-m', 30, to].map(String)
+  // On Linux, -w is MAX,HERE,NEAR: a lost probe waits 3× (RTT + 1 ms) of a reply from
+  // its hop, or 30× that of a later hop, not the full second that holds back
+  // every line after it ("-w 1" alone turns that off). Not the default 10×: Linode's
+  // gateway can answer in 30 ms while the hop after it answers in 0.3 ms. macOS takes one number.
+  const wait = process.platform === 'linux' ? '1,3,30' : 1
+  const args = ['-I', '-n', '-q', PROBES, '-w', wait, '-m', 30, to].map(String)
   const p = spawn(to.includes(':') ? 'traceroute6' : 'traceroute', args)
   res.on('close', () => p.kill())
 
