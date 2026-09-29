@@ -42,7 +42,6 @@ function geo(ip) {
     mask,
     kind,
     ipmap: kind === 'public' ? measured(ip) : undefined, // the dump also lists private addresses, at random cities
-    anycast: sitesOf(ip),
   }
 }
 
@@ -165,7 +164,7 @@ export function trace(req, res) {
   const header = line => {
     const m = line.match(/^traceroute6? to (\S+) \(([^)]+)\)/)
     if (m) {
-      send('target', geo((dest = m[2])))
+      send('target', { ...geo((dest = m[2])), anycast: sitesOf(dest) })
       lookups.push(knock(dest))
     }
     return m
@@ -203,7 +202,8 @@ export function trace(req, res) {
       else if (t[i + 1] === 'ms') r?.ms.push(+t[i++]), hop.sent++
       else if (isIP(t[i])) {
         r = hop.replies.find(x => x.ip === t[i])
-        if (!r) hop.replies.push((r = { ...geo(t[i]), ms: [] }))
+        // Routers answer from their own addresses, so the anycast census only fits the destination.
+        if (!r) hop.replies.push((r = { ...geo(t[i]), anycast: t[i] === dest ? sitesOf(dest) : undefined, ms: [] }))
         name(t[i])
       }
     }
