@@ -42,11 +42,14 @@
   })
   let k = $derived(view ? view[2] / w : 1) // map units per px
 
-  // Until the reader moves the map, it frames the route and destination,
-  // or the world before there is one.
+  // Until the reader moves the map, it frames the route and destination, or the
+  // world before there is one. A destination with no place yet (anycast before it
+  // answers, or one the database or port 443 can't place) keeps the world in view:
+  // the route alone can fold back into the server's city as names move its hops,
+  // and the view would swing in and out.
   let manual = $state(false)
   let frame = $derived.by(() => {
-    const pts = [...stops, ...(target ? [target] : [])].map(xy)
+    const pts = (target ? [...stops, target] : run.status === 'tracing' ? [] : stops).map(xy)
     const [[x0, y0], [x1, y1]] =
       pts.length > 1
         ? [[Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1]))], [Math.max(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1]))]]

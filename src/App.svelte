@@ -14,7 +14,8 @@
   let stops = $derived(route(source, spots))
   // Once the destination answers probes, its own place replaces the DB's guess;
   // when there is none (anycast), pin it where the route got to. An answer on
-  // port 443 alone still checks the DB's place against that round trip.
+  // port 443 alone still checks the DB's place against that round trip. An
+  // anycast address has no one place until something answers.
   let target = $derived.by(() => {
     const t = run.target
     if (t?.lat == null) return null
@@ -23,7 +24,9 @@
       ? (spots.at(-1) ?? stops.at(-1))
       : run.tcp
         ? place({ ...t, ms: [run.tcp.ms] }, run.names[t.ip], source, stops.at(-1))
-        : t
+        : t.anycast
+          ? null
+          : t
     return p && { ...t, lat: p.lat, lon: p.lon, city: p.city }
   })
 
