@@ -4,7 +4,7 @@
   import HopDetail from './HopDetail.svelte'
   import { city, fmt, km, num, rtt, tooFar } from './lib.js'
 
-  let { source, run, spots, stops, selected = $bindable(), hovered = $bindable() } = $props()
+  let { source, run, spots, stops, target, selected = $bindable(), hovered = $bindable() } = $props()
 
   const JUMP = 20 // ms; a bigger step between hops usually means a long cable
   const HEADLINE = { tracing: 'In transit', reached: 'Delivered', stopped: 'No answer at the door', error: 'Trace failed' }
@@ -42,10 +42,14 @@
   let before = $derived(open > 0 ? rows.slice(0, open).findLast(x => x.r) : null)
   let after = $derived(open >= 0 ? rows.slice(open + 1).find(x => x.r) : null)
 
+  // The probes stopped short, but the destination answered on port 443.
+  let knocked = $derived(run.status === 'stopped' && run.tcp)
+
   let note = $derived.by(() => {
     const at = seen ? `Last seen at hop ${seen.hop.n} in ${seen.at.city}.` : ''
     if (run.status === 'tracing') return `Probing hop ${hops.length + 1}. ${at}`
     if (run.status === 'reached') return `${run.me ? 'You' : 'The destination'} answered at hop ${hops.length}.`
+    if (knocked) return `Answered on port 443 in ${fmt(run.tcp.ms)} ms, not to probes. ${at}`
     if (run.status === 'stopped') return `${at} No reply after that.`
     return run.error
   })
@@ -79,7 +83,7 @@
     <span class="k">Tracking</span>
     <span><b>{run.me ? 'You' : run.to}</b><code>{run.target?.ip}</code></span>
   </p>
-  <h1 class={run.status} aria-live="polite">{HEADLINE[run.status]}</h1>
+  <h1 class={run.status} aria-live="polite">{HEADLINE[knocked ? 'reached' : run.status]}</h1>
   <p class="note">{note}</p>
 
   {#if hops.length}
@@ -93,13 +97,21 @@
       </dd>
       <dt>Round trip</dt>
       <dd>
-        {last ? `${fmt(last.ms)} ms` : '—'}
-        {#if last && run.status !== 'reached'}<small>to hop {last.hop.n}</small>{/if}
+        {#if knocked}
+          {fmt(run.tcp.ms)} ms<small>port 443</small>
+        {:else}
+          {last ? `${fmt(last.ms)} ms` : '—'}
+          {#if last && run.status !== 'reached'}<small>to hop {last.hop.n}</small>{/if}
+        {/if}
       </dd>
       <dt>Distance</dt>
       <dd>
-        {#if routeKm < 50}all near {stops[0]?.city ?? 'the server'}{:else}{num(routeKm)} km{/if}
-        {#if directKm > 50}<small>{(routeKm / directKm).toFixed(1)} × the straight line</small>{/if}
+        {#if knocked && target && source?.lat != null}
+          {num(km(source, target))} km<small>straight line; the route is hidden</small>
+        {:else}
+          {#if routeKm < 50}all near {stops[0]?.city ?? 'the server'}{:else}{num(routeKm)} km{/if}
+          {#if directKm > 50}<small>{(routeKm / directKm).toFixed(1)} × the straight line</small>{/if}
+        {/if}
       </dd>
       <dt>Networks</dt>
       {#each nets as x (x.hop.n)}
@@ -151,6 +163,17 @@
         {/if}
       </li>
     {/each}
+
+    {#if knocked}
+      <li class="knock">
+        <div class="row">
+          <span class="n">443</span>
+          <span class="where">{target ? `${target.city}, ${target.cc}` : run.target?.ip}</span>
+          <span class="ms">{fmt(run.tcp.ms)}</span>
+          <span class="sub">{run.me ? 'you' : 'destination'} · answered on port 443, not to probes</span>
+        </div>
+      </li>
+    {/if}
 
     {#if run.status === 'tracing'}
       <li class="live">
@@ -286,7 +309,8 @@
   }
 
   /* a rule where the packet changes hands, matching "Networks" above */
-  li.entered::before {
+  li.entered::before,
+  li.knock::before {
     content: '';
     display: block;
     margin-left: calc(var(--gutter) + var(--label) + var(--gap));

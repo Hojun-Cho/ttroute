@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { Resolver } from 'node:dns/promises'
 import { createInterface } from 'node:readline'
-import { isIP } from 'node:net'
+import { connect, isIP } from 'node:net'
 import { Reader } from 'mmdb-lib'
 import places from './places.js'
 import { block, key } from './ip.js'
@@ -121,6 +121,21 @@ function hint(host) {
   return { place, device: [role, port].filter(Boolean).join(' · ') || undefined }
 }
 
+// handshake times one TCP connection to port 443, or returns null if nothing answers.
+// A refusal counts as an answer: something at that address replied.
+const handshake = ip =>
+  new Promise(done => {
+    const t0 = performance.now()
+    const s = connect({ host: ip, port: 443, timeout: 3000 })
+    const end = answered => {
+      s.destroy()
+      done(answered ? performance.now() - t0 : null)
+    }
+    s.on('connect', () => end(true))
+    s.on('error', e => end(e.code === 'ECONNREFUSED'))
+    s.on('timeout', () => end(false))
+  })
+
 const clientIP = req =>
   (req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress).replace(/^::ffff:/, '')
 
@@ -149,8 +164,24 @@ export function trace(req, res) {
   // macOS prints this line to stderr, Linux to stdout.
   const header = line => {
     const m = line.match(/^traceroute6? to (\S+) \(([^)]+)\)/)
-    if (m) send('target', geo((dest = m[2])))
+    if (m) {
+      send('target', geo((dest = m[2])))
+      lookups.push(knock(dest))
+    }
     return m
+  }
+
+  // Many sites drop probes but must answer web traffic, so handshakes on port
+  // 443, alongside the trace, show whether the destination is there and its
+  // round trip (the best of three).
+  const knock = async ip => {
+    let best
+    for (let i = 0; i < 3; i++) {
+      const ms = await handshake(ip)
+      if (ms == null) break
+      best = Math.min(best ?? ms, ms)
+    }
+    if (best != null) send('tcp', { port: 443, ms: best })
   }
 
   const name = ip => {

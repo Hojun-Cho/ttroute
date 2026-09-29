@@ -372,7 +372,7 @@
       {#if target}
         {#key target.lat}
           <g transform="translate({xy(target)}) scale({k})">
-            <g class="target" class:reached={run.status === 'reached'}>
+            <g class="target" class:reached={run.status === 'reached' || run.tcp}>
               {#if run.status === 'tracing'}
                 <circle class="pulse" r="6" />
                 <circle class="pulse late" r="6" />

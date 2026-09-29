@@ -1,7 +1,7 @@
 <script>
   import WorldMap from './WorldMap.svelte'
   import Hops from './Hops.svelte'
-  import { locate, route } from './lib.js'
+  import { locate, place, route } from './lib.js'
 
   let source = $state(null) // the server, where every trace starts
   let run = $state({})
@@ -12,13 +12,18 @@
 
   let spots = $derived(locate(source, run.hops, run.names)) // each hop's place, or null
   let stops = $derived(route(source, spots))
-  // Once the destination answers, its own place replaces the DB's guess; when
-  // there is none (anycast), pin it where the route got to.
+  // Once the destination answers probes, its own place replaces the DB's guess;
+  // when there is none (anycast), pin it where the route got to. An answer on
+  // port 443 alone still checks the DB's place against that round trip.
   let target = $derived.by(() => {
     const t = run.target
     if (t?.lat == null) return null
     const answered = run.hops.at(-1)?.replies.some(r => r.ip === t.ip)
-    const p = answered ? (spots.at(-1) ?? stops.at(-1)) : t
+    const p = answered
+      ? (spots.at(-1) ?? stops.at(-1))
+      : run.tcp
+        ? place({ ...t, ms: [run.tcp.ms] }, run.names[t.ip], source, stops.at(-1))
+        : t
     return p && { ...t, lat: p.lat, lon: p.lon, city: p.city }
   })
 
@@ -27,7 +32,7 @@
     es?.close()
     input = to
     selected = hovered = null
-    run = { to, me: !to, target: null, hops: [], names: {}, status: 'tracing', error: null }
+    run = { to, me: !to, target: null, hops: [], names: {}, tcp: null, status: 'tracing', error: null }
     const q = to ? '?to=' + encodeURIComponent(to) : ''
     history.replaceState(null, '', q || location.pathname)
 
@@ -40,6 +45,7 @@
     on('target', d => (run.target = d))
     on('hop', h => (run.hops[h.n - 1] = h))
     on('name', d => (run.names[d.ip] = d))
+    on('tcp', d => (run.tcp = d))
     on('end', d => {
       es.close()
       run.error = d.error
@@ -71,7 +77,7 @@
       <button>Trace</button>
     </form>
 
-    <Hops {source} {run} {spots} {stops} bind:selected bind:hovered />
+    <Hops {source} {run} {spots} {stops} {target} bind:selected bind:hovered />
   </aside>
 </main>
 
