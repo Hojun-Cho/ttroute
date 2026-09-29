@@ -315,14 +315,22 @@
       // Most important first: a label that would overlap an earlier one is dropped.
       labels: place([
         target && { id: 'target', at: xy(target), text: run.me ? `You · ${city(target) ?? target.ip}` : run.to, force: true },
-        ...shown.filter(s => s.lit && s.i).map(s => ({ id: s.i, at: s.at, text: s.city, tag: '#' + s.hops.join(' #'), force: true })),
+        ...shown.filter(s => s.lit && s.i).map(s => ({ id: s.i, at: s.at, text: s.city, tag: tags(s.hops), force: true })),
         ...['from', 'to'].map(kind => {
           const s = shown.find(s => !s.lit && role(stops[s.i]) === kind)
           if (!s) return
           const hops = s.hops.filter(n => n && (kind === 'from' ? n < selected : n > selected))
-          return { id: kind, kind, at: s.at, text: `${kind === 'from' ? 'from' : 'next'} · ${s.i ? s.city : 'the server'}`, tag: hops.length ? '#' + hops.join(' #') : '', force: true }
+          return { id: kind, kind, at: s.at, text: `${kind === 'from' ? 'from' : 'next'} · ${s.i ? s.city : 'the server'}`, tag: tags(hops), force: true }
         }),
-        shown[0]?.i === 0 && role(stops[0]) !== 'from' && { id: 0, at: shown[0].at, away: shown[1]?.at, text: `Server · ${shown[0].city ?? '?'}` },
+        // away from where the route leaves, which a stop right beside the server doesn't show;
+        // beside as seen in the fitted view, so the label keeps its side while the camera zooms
+        shown[0]?.i === 0 &&
+          role(stops[0]) !== 'from' && {
+            id: 0,
+            at: shown[0].at,
+            away: shown.find(s => Math.hypot(s.at[0] - shown[0].at[0], s.at[1] - shown[0].at[1]) > (20 * Math.exp(frame[2])) / w)?.at,
+            text: `Server · ${shown[0].city ?? '?'}`,
+          },
         // the newest stop, until the probe gets to the destination, which has its own label
         !selected && (run.status !== 'reached' || reach < total) && newest?.i && !newest.lit && { id: newest.i, at: newest.at, away: shown.at(-2).at, text: newest.city },
       ]),
@@ -339,7 +347,7 @@
   // else the other side, else nowhere, keeping labels on screen and apart.
   function place(labels) {
     const boxes = []
-    const width = text => [...text].reduce((w, c) => w + (c > '\u1100' ? 11.5 : 6.8), 0)
+    const width = text => [...text].reduce((w, c) => w + (c > '\u1100' && c !== '\u2013' ? 11.5 : 6.8), 0) // CJK is wide; tags' dash is not
     // Mid-flight, labels take their sides for the view it lands on, so they don't flip on the way.
     const [vx, vw] = flight ? [flight.to[0] - Math.exp(flight.to[2]) / 2, Math.exp(flight.to[2])] : [view[0], view[2]]
     const k = vw / w
@@ -373,6 +381,8 @@
   }
 
   const pick = s => s.hops.find(n => n > 0) ?? null
+  // tags writes hop numbers with each run of consecutive ones as a range: "#1–7", "#5 #7–8".
+  const tags = ns => ns.reduce((t, n, i) => t + (ns[i - 1] === n - 1 ? (ns[i + 1] === n + 1 ? '' : `–${n}`) : ` #${n}`), '').trim()
 </script>
 
 <div class="map" bind:clientWidth={w} bind:clientHeight={h}>

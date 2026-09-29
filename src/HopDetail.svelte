@@ -92,15 +92,17 @@
     color: var(--ink-3);
   }
 
+  /* A note that doesn't fit beside its value goes under it, instead of squeezing it mid-word. */
   dd {
     display: flex;
-    justify-content: space-between;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 0 12px;
     min-width: 0;
     overflow-wrap: anywhere;
   }
 
   small {
+    margin-left: auto;
     color: var(--ink-3);
     font-size: inherit;
     text-align: right;
