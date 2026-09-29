@@ -30,8 +30,8 @@
     return p && { ...t, lat: p.lat, lon: p.lon, city: p.city }
   })
 
-  // Accepts pasted URLs: "https://naver.com/x" traces naver.com.
-  function start(to = input.trim().replace(/^\w+:\/\/|[/?#].*$/g, '')) {
+  // Accepts pasted URLs: "https://naver.com:443/x" traces naver.com.
+  function start(to = input.trim().replace(/^\w+:\/\/|[/?#].*$/g, '').replace(/^([^:]*):\d+$/, '$1')) {
     es?.close()
     input = to
     selected = hovered = null

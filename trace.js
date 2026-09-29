@@ -231,7 +231,12 @@ export function trace(req, res) {
   p.on('close', async code => {
     await Promise.all(lookups) // the destination's name resolves after traceroute exits
     const reached = !!hop?.replies.some(r => r.ip === dest)
-    send('end', { reached, error: code && !hop ? err.trim() || 'traceroute failed' : undefined })
+    // The pod network has no IPv6, so traceroute can't open a socket toward an IPv6 address.
+    if (err.includes('Network is unreachable')) err = 'This server cannot trace IPv6.'
+    // Linux starts with the host ("x.invalid: Name or service not known"), which the page already shows.
+    if (err.includes('Name or service not known')) err = 'No such host.'
+    // The first line says what went wrong; Linux adds one about its argument parser.
+    send('end', { reached, error: code && !hop ? err.trim().split('\n')[0] || 'traceroute failed' : undefined })
     res.end()
   })
 }
