@@ -1,0 +1,65 @@
+:root {
+  --sheet: #fff;
+  --paper: #f0efea;
+  --ink: #161616;
+  --ink-2: #5f5e58;
+  --ink-3: #77756f;
+  --rule: #e3e1db;
+  --accent: #d4410f; /* packets in flight, whatever is live, and where a selected hop leads */
+  --sans: 'Archivo', system-ui, sans-serif;
+  --mono: 'Chivo Mono', ui-monospace, Menlo, monospace;
+  /* The sidebar hangs on one axis: labels and hop numbers end at it, values start after it. */
+  --gutter: 20px;
+  --label: 72px;
+  --gap: 12px;
+  --map-h: 42svh; /* on phones, where the map sticks to the top */
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  background: var(--sheet);
+  color: var(--ink);
+  font: 14px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #d4410f30;
+}
+
+@media (max-width: 860px) {
+  :root {
+    --gutter: 16px;
+    --label: 64px;
+  }
+}
