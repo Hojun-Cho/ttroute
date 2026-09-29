@@ -17,7 +17,7 @@ const types = {
   '.css': 'text/css',
 }
 
-http
+const server = http
   .createServer(async (req, res) => {
     try {
       const { pathname } = new URL(req.url, 'http://x') // throws on targets like "//"
@@ -40,3 +40,6 @@ http
     }
   })
   .listen(process.env.PORT || 3000)
+
+// As PID 1 in the container, node ignores SIGTERM unless it handles it.
+process.on('SIGTERM', () => server.close())
