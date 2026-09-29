@@ -32,10 +32,11 @@ spec:
           image: node:24-slim
           command:
             - sh
-            - -ec
+            - -exc
             - |
               apt-get update
               apt-get install -y --no-install-recommends git curl bzip2 ca-certificates traceroute
+              rm -rf /opt/app/* /opt/app/.[!.]*  # the volume outlives a failed attempt; start clean
               git clone --depth 1 https://github.com/Hojun-Cho/ttroute.git /opt/app
               cd /opt/app
               npm ci
