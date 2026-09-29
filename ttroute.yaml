@@ -1,5 +1,5 @@
 # ttroute: traces the route from this pod to each visitor and draws it on a map.
-# Deploy:  kubectl apply -f ttroute.yaml
+# Deploy:  kubectl apply -f ttroute.yaml   (then open http://<node public IP>/)
 # Update:  kubectl rollout restart deployment/ttroute
 #          (a new pod clones the latest code and downloads fresh location data;
 #          the old pod keeps serving until the new one is ready)
@@ -91,3 +91,21 @@ spec:
     app.kubernetes.io/name: ttroute
   ports:
     - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ttroute
+  labels:
+    app.kubernetes.io/name: ttroute
+spec:
+  # no host: serves http://<node public IP>/ through the cluster's default ingress class
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ttroute
+                port: { name: http }
