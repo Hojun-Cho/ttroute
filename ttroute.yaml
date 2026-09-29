@@ -1,0 +1,92 @@
+# ttroute: traces the route from this pod to each visitor and draws it on a map.
+# Deploy:  kubectl apply -f ttroute.yaml
+# Update:  kubectl rollout restart deployment/ttroute
+#          (a new pod clones the latest code and downloads fresh location data;
+#          the old pod keeps serving until the new one is ready)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ttroute
+  labels:
+    app.kubernetes.io/name: ttroute
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ttroute
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ttroute
+    spec:
+      securityContext:
+        sysctls:
+          # lets traceroute send ICMP probes through ping sockets, without root or NET_RAW
+          - { name: net.ipv4.ping_group_range, value: "0 2147483647" }
+      initContainers:
+        - name: build
+          image: node:24-slim
+          command:
+            - sh
+            - -ec
+            - |
+              apt-get update
+              apt-get install -y --no-install-recommends git curl bzip2 ca-certificates traceroute
+              git clone --depth 1 https://github.com/Hojun-Cho/ttroute.git /opt/app
+              cd /opt/app
+              npm ci
+              npm run build
+              npm prune --omit=dev
+              npm run geodb
+              mkdir -p bin
+              cp -L "$(command -v traceroute)" bin/traceroute
+              ln -sf traceroute bin/traceroute6
+          volumeMounts:
+            - { name: app, mountPath: /opt/app }
+          resources:
+            requests: { cpu: 500m, memory: 512Mi }
+            limits:   { memory: 1536Mi }
+      containers:
+        - name: ttroute
+          image: node:24-slim
+          workingDir: /opt/app
+          command: ["node", "server.js"]
+          env:
+            - { name: PATH, value: "/opt/app/bin:/usr/local/bin:/usr/bin:/bin" }
+            - { name: PORT, value: "3000" }
+            # the cluster's public egress IP, where traces start; empty looks it up at startup
+            - { name: SELF_IP, value: "" }
+          ports:
+            - { name: http, containerPort: 3000 }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: app, mountPath: /opt/app }
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits:   { memory: 768Mi }
+      volumes:
+        - name: app
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ttroute
+  labels:
+    app.kubernetes.io/name: ttroute
+spec:
+  selector:
+    app.kubernetes.io/name: ttroute
+  ports:
+    - { name: http, port: 80, targetPort: http }
