@@ -181,9 +181,10 @@
   let now = $state(0)
   let reach = 0 // radians of route uncovered
   let arrived = [] // arrived[i]: time the probe reached stops[i]
-  let packets = [] // { pts, t0, dur, len, kind }
+  let packets = [] // { pts, t0, dur, len, kind, n }: n is the hop at its far end, none for a flow
   let last // run the state above belongs to
   let lastFlow = 0
+  let landed = false // the probe got to a destination that answered
 
   $effect(() => {
     let raf
@@ -198,17 +199,20 @@
   })
 
   function step(t, dt) {
-    if (run !== last) [last, reach, arrived, packets, manual] = [run, 0, [], [], false]
+    if (run !== last) [last, reach, arrived, packets, manual, landed] = [run, 0, [], [], false, false]
     if (fling) {
       const [vx, vy] = fling
       pan(vx * dt * 1000, vy * dt * 1000)
       fling = Math.hypot(vx, vy) < 0.02 ? null : [vx * Math.exp(-dt * 6), vy * Math.exp(-dt * 6)]
     }
     const total = stops.at(-1)?.d ?? 0
-    reach = Math.min(total, reach + Math.max(1.2, (total - reach) * 6) * dt) // hurry when behind
+    // Hurry when behind. Once the probe is at a destination that answered, a late
+    // host name that moves a stop redraws the route without sending the probe out again.
+    reach = landed ? total : Math.min(total, reach + Math.max(1.2, (total - reach) * 6) * dt)
+    landed = run.status === 'reached' && reach === total
     for (let i = arrived.length; i < stops.length && stops[i].d <= reach; i++) {
       arrived[i] = t
-      if (i) packets.push(packet(stops.slice(0, i + 1).reverse(), t, 'reply'))
+      if (i) packets.push(packet(stops.slice(0, i + 1).reverse(), t, 'reply', stops[i].hops[0]))
     }
     // Once the route is known, traffic keeps flowing along it; with a hop
     // selected, its own exchange repeats instead: a probe out, the reply back.
@@ -216,16 +220,21 @@
       lastFlow = t
       const i = selected ? stops.findIndex(s => s.hops.includes(selected)) : -1
       if (i > 0) {
-        const probe = packet(stops.slice(0, i + 1), t, 'probe')
-        packets.push(probe, packet(stops.slice(0, i + 1).reverse(), t + probe.dur, 'reply'))
+        const probe = packet(stops.slice(0, i + 1), t, 'probe', selected)
+        packets.push(probe, packet(stops.slice(0, i + 1).reverse(), t + probe.dur, 'reply', selected))
       } else packets.push(packet(stops, t, 'flow'))
+    }
+    // A late host name can move a stop under a packet on its way.
+    for (const p of packets) {
+      const i = p.n ? stops.findIndex(s => s.hops.includes(p.n)) : stops.length - 1
+      if (i >= 0) Object.assign(p, { pts: p.kind === 'reply' ? stops.slice(0, i + 1).reverse() : stops.slice(0, i + 1), len: stops[i].d })
     }
     packets = packets.filter(p => t < p.t0 + p.dur)
   }
 
-  function packet(pts, t0, kind) {
+  function packet(pts, t0, kind, n) {
     const len = pts.reduce((s, p, i) => (i ? s + geoDistance(ll(pts[i - 1]), ll(p)) : 0), 0)
-    return { pts, t0, len, kind, dur: (kind === 'flow' ? 800 : 350) + len * (kind === 'flow' ? 500 : 400) }
+    return { pts, t0, len, kind, n, dur: (kind === 'flow' ? 800 : 350) + len * (kind === 'flow' ? 500 : 400) }
   }
 
   // along returns the [lon, lat] a distance d (radians) along pts.
@@ -279,11 +288,13 @@
           return { id: kind, kind, at: s.at, text: `${kind === 'from' ? 'from' : 'next'} · ${s.i ? s.city : 'the server'}`, tag: hops.length ? '#' + hops.join(' #') : '', force: true }
         }),
         shown[0]?.i === 0 && role(stops[0]) !== 'from' && { id: 0, at: shown[0].at, away: shown[1]?.at, text: `Server · ${shown[0].city ?? '?'}` },
-        !selected && run.status !== 'reached' && newest?.i && !newest.lit && { id: newest.i, at: newest.at, away: shown.at(-2).at, text: newest.city },
+        // the newest stop, until the probe gets to the destination, which has its own label
+        !selected && (run.status !== 'reached' || reach < total) && newest?.i && !newest.lit && { id: newest.i, at: newest.at, away: shown.at(-2).at, text: newest.city },
       ]),
       packets: packets.filter(p => t >= p.t0).map(p => {
         const u = (t - p.t0) / p.dur
-        const at = u => xy(along(p.pts, p.len * cubicInOut(clamp(u))))
+        // a reply from a stop that a late host name moved past the probe waits for it
+        const at = u => xy(along(p.pts, Math.max(p.len * cubicInOut(clamp(u)), p.kind === 'reply' ? p.len - reach : 0)))
         return { kind: p.kind, fade: Math.min(1, u * 8, (1 - u) * 8), trail: [0, 1, 2, 3].map(j => at(u - j * 0.02)) }
       }),
     }

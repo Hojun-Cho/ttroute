@@ -46,7 +46,11 @@
       run.me = d.me
     })
     on('target', d => (run.target = d))
-    on('hop', h => (run.hops[h.n - 1] = h))
+    on('hop', h => {
+      run.hops[h.n - 1] = h
+      // Delivered now: 'end' waits for the last names and the port 443 check.
+      if (h.replies.some(r => r.ip === run.target?.ip)) run.status = 'reached'
+    })
     on('name', d => (run.names[d.ip] = d))
     on('tcp', d => (run.tcp = d))
     on('end', d => {
