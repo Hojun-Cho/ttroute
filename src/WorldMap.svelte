@@ -3,7 +3,7 @@
   import { geoNaturalEarth1, geoPath, geoGraticule10, geoInterpolate, geoDistance } from 'd3-geo'
   import { feature, mesh } from 'topojson-client'
   import { Spring } from 'svelte/motion'
-  import { cubicInOut, backOut } from 'svelte/easing'
+  import { cubicInOut, sineInOut, backOut } from 'svelte/easing'
   import world from 'world-atlas/countries-50m.json'
   import { ll, city } from './lib.js'
 
@@ -63,7 +63,10 @@
     return [keep((x0 + x1) / 2, vw, wx0, wx1), keep((y0 + y1) / 2, vh, wy0, wy1), Math.log(vw)]
   })
   $effect(() => {
-    if (w && h && !manual) camera.set(frame) // the first set is instant
+    if (w && h && !manual) {
+      flight = null
+      camera.set(frame) // the first set is instant
+    }
   })
 
   // around returns the stops a hop sits among: [before, at, after] for a placed
@@ -84,17 +87,40 @@
     untrack(() => {
       const near = n ? around(n) : []
       const s = near.find(s => s.hops.includes(n)) ?? near[0]
-      if (!s) return
+      if (!s || s === flight?.s) return // already on the way there; a new trip would start from rest
       const [x, y] = xy(s)
       const gap = Math.min(...near.filter(o => o !== s).map(o => Math.hypot(xy(o)[0] - x, xy(o)[1] - y)))
-      look([x, y, Math.min(camera.target[2], REGION, Math.log((gap * w) / 60))], false)
+      // mid-flight, camera.target is where the flight is, not where it lands
+      const z = clamp(Math.min(flight?.to[2] ?? camera.target[2], REGION, Math.log((gap * w) / 60)), ...ZOOM)
+      const [cx, cy, cz] = camera.current
+      if (Math.hypot(x - cx, y - cy) < k) return look([x, y, z], false) // no trip, only a zoom
+      look(camera.current) // stops a fling, a spring move or an earlier flight
+      flight = { ...fly([cx, cy, Math.exp(cz)], [x, y, Math.exp(z)]), to: [x, y, z], s }
     })
   })
+
+  // fly returns the way from view a to view b, each [x, y, width]: out as far as
+  // the trip needs and back in, at an even pace on screen, so a far hop doesn't
+  // slide past at close zoom (van Wijk and Nuij's path, as in d3's interpolateZoom).
+  // at(s) is the view at s along it, from 0 to its length S.
+  function fly([x0, y0, w0], [x1, y1, w1]) {
+    const [dx, dy] = [x1 - x0, y1 - y0]
+    const d = Math.hypot(dx, dy)
+    const b = (w, dd) => (w1 * w1 - w0 * w0 + dd) / (4 * w * d)
+    const r0 = -Math.asinh(b(w0, 4 * d * d))
+    const S = (-Math.asinh(b(w1, -4 * d * d)) - r0) / Math.SQRT2
+    const at = s => {
+      const r = Math.SQRT2 * s + r0
+      const u = (w0 / (2 * d)) * (Math.cosh(r0) * Math.tanh(r) - Math.sinh(r0))
+      return [x0 + u * dx, y0 + u * dy, (w0 * Math.cosh(r0)) / Math.cosh(r)]
+    }
+    return { at, S }
+  }
 
   // look moves the camera for the reader, keeping the view's center over the world.
   function look([x, y, z], instant = true) {
     manual = true
-    fling = null
+    fling = flight = null
     const [[x0, y0], [x1, y1]] = bounds
     camera.set([clamp(x, x0, x1), clamp(y, y0, y1), clamp(z, ...ZOOM)], { instant })
   }
@@ -120,6 +146,7 @@
   let velocity = [0, 0] // px per ms, of the last drag move
   let moved = 0 // timeStamp of the last drag move
   let fling = null
+  let flight = null // a selection's trip, from fly(), advanced in step
 
   const pos = e => {
     const r = el.getBoundingClientRect()
@@ -204,6 +231,14 @@
       const [vx, vy] = fling
       pan(vx * dt * 1000, vy * dt * 1000)
       fling = Math.hypot(vx, vy) < 0.02 ? null : [vx * Math.exp(-dt * 6), vy * Math.exp(-dt * 6)]
+    }
+    if (flight) {
+      flight.t0 ??= t - dt * 1000 // it began between the last frame and this one
+      const u = clamp((t - flight.t0) / 350)
+      // sineInOut peaks at half cubicInOut's speed, so even a trip across the world is easy to follow
+      const [x, y, vw] = flight.at(sineInOut(u) * flight.S)
+      camera.set([x, y, Math.log(vw)], { instant: true })
+      if (u === 1) flight = null
     }
     const total = stops.at(-1)?.d ?? 0
     // Hurry when behind. Once the probe is at a destination that answered, a late
@@ -305,7 +340,9 @@
   function place(labels) {
     const boxes = []
     const width = text => [...text].reduce((w, c) => w + (c > '\u1100' ? 11.5 : 6.8), 0)
-    const [vx, , vw] = view
+    // Mid-flight, labels take their sides for the view it lands on, so they don't flip on the way.
+    const [vx, vw] = flight ? [flight.to[0] - Math.exp(flight.to[2]) / 2, Math.exp(flight.to[2])] : [view[0], view[2]]
+    const k = vw / w
     return labels.filter(Boolean).flatMap(l => {
       const x = l.at[0] / k
       const y = l.at[1] / k
