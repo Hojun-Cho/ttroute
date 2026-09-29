@@ -74,6 +74,7 @@ function measured(ip) {
 
 // Blocks that never route on the public internet.
 const SPECIAL = [
+  ['0.0.0.0/8', 'this network'],
   ['10.0.0.0/8', 'private'],
   ['172.16.0.0/12', 'private'],
   ['192.168.0.0/16', 'private'],
@@ -82,6 +83,7 @@ const SPECIAL = [
   ['169.254.0.0/16', 'link-local'],
   ['fc00::/7', 'private'],
   ['fe80::/10', 'link-local'],
+  ['::/128', 'unspecified'],
   ['::1/128', 'loopback'],
 ]
 
@@ -163,7 +165,11 @@ export function trace(req, res) {
   // macOS prints this line to stderr, Linux to stdout.
   const header = line => {
     const m = line.match(/^traceroute6? to (\S+) \(([^)]+)\)/)
-    if (m) {
+    if (m && geo(m[2]).kind !== 'public') {
+      // A private or local address would trace the server's own network, not the internet.
+      send('end', { error: 'Not a public address.' })
+      res.end() // 'close' stops traceroute
+    } else if (m) {
       send('target', { ...geo((dest = m[2])), anycast: sitesOf(dest) })
       lookups.push(knock(dest))
     }
