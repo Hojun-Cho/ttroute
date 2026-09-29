@@ -98,6 +98,9 @@ metadata:
   name: ttroute
   labels:
     app.kubernetes.io/name: ttroute
+  annotations:
+    # per client IP, bursts of 25 allowed: one visitor's flood of traces can't stall the rest
+    nginx.ingress.kubernetes.io/limit-rps: "5"
 spec:
   # no host: serves http://<node public IP>/ through the cluster's default ingress class
   rules:
