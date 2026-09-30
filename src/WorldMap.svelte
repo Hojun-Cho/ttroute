@@ -28,10 +28,9 @@
   $effect(() => {
     const s = source?.lon ?? 0
     const t = run.target
-    if (t) {
-      const west = (s - t.lon + 360) % 360
-      lon = !t.anycast && west > 110 && west <= 180 ? s + 110 : s
-    } else if (lon == null && run.status !== 'tracing') lon = s
+    const west = t && (s - t.lon + 360) % 360
+    const to = t ? (!t.anycast && west > 110 && west <= 180 ? s + 110 : s) : (lon ?? (run.status === 'tracing' ? null : s))
+    if (to !== lon) untrack(() => recenter(to))
   })
   let projection = $derived(geoNaturalEarth1().rotate([-(lon ?? 0), 0]).fitWidth(W, sphere))
   let path = $derived(geoPath(projection))
@@ -84,6 +83,15 @@
     fling = null
     flight = Math.hypot(frame[0] - x, frame[1] - y) < k ? null : { ...fly([x, y, Math.exp(z)], [frame[0], frame[1], Math.exp(frame[2])]), to: frame }
     manual = false
+  }
+
+  // recenter turns the world to a new center: a reader looking at a place keeps
+  // looking at it, and a flight planned on the old map ends.
+  function recenter(to) {
+    const at = manual && lon != null && projection.invert(camera.current)
+    lon = to
+    flight = null
+    if (at) camera.set([...projection(at), camera.current[2]], { instant: true })
   }
 
   // around returns the stops a hop sits among: [before, at, after] for a placed
@@ -237,6 +245,7 @@
   let last // run the state above belongs to
   let lastFlow = 0
   let landed = false // the probe got to a destination that answered
+  let refit = false // a new run started while the reader was zoomed in
 
   $effect(() => {
     let raf
@@ -253,7 +262,12 @@
   function step(t, dt) {
     if (run !== last) {
       ;[last, reach, arrived, packets, landed] = [run, 0, {}, [], false]
-      if (manual) fit()
+      refit = manual
+    }
+    // A reader zoomed in on the last route flies back once the new one has somewhere to go.
+    if (refit && (run.target || run.status !== 'tracing')) {
+      refit = false
+      fit()
     }
     if (fling) {
       const [vx, vy] = fling
@@ -261,8 +275,8 @@
       fling = Math.hypot(vx, vy) < 0.02 ? null : [vx * Math.exp(-dt * 6), vy * Math.exp(-dt * 6)]
     }
     if (flight) {
-      flight.t0 ??= t - dt * 1000 // it began between the last frame and this one
-      const u = clamp((t - flight.t0) / 350)
+      // by frame time, which tick caps, so a long frame (a re-projected world) slows the trip instead of skipping it
+      const u = (flight.u = clamp((flight.u ?? 0) + dt / 0.35))
       // sineInOut peaks at half cubicInOut's speed, so even a trip across the world is easy to follow
       const [x, y, vw] = flight.at(sineInOut(u) * flight.S)
       camera.set([x, y, Math.log(vw)], { instant: true })
