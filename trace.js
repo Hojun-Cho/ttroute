@@ -19,6 +19,8 @@ const dns = new Resolver({ timeout: 1000, tries: 1 })
 
 const PROBES = 3 // per hop
 const MAX_SILENT = 8 // give up after this many silent hops in a row; clouds like Azure hide ~7
+const MAX_TRACES = 100 // at once, for all visitors: each is a traceroute process, and the pod's memory holds ~300
+let running = 0
 
 // Every trace starts here, so the map needs to know where "here" is. An error page is
 // not an address, and a lookup that failed at startup is tried again by later traces.
@@ -159,6 +161,10 @@ export function trace(req, res) {
     send('end', { error: 'Not a host or IP address.' }) // the page already shows what was typed
     return res.end()
   }
+  if (running >= MAX_TRACES) {
+    send('end', { error: 'Too many traces right now. Try again in a moment.' })
+    return res.end()
+  }
 
   // ICMP probes (-I) get much further than UDP ones; Linux needs CAP_NET_RAW for them.
   // On Linux, -w is MAX,HERE,NEAR: a lost probe waits 3× (RTT + 1 ms) of a reply from
@@ -167,6 +173,7 @@ export function trace(req, res) {
   // gateway can answer in 30 ms while the hop after it answers in 0.3 ms. macOS takes one number.
   const wait = process.platform === 'linux' ? '1,3,30' : 1
   const args = ['-I', '-n', '-q', PROBES, '-w', wait, '-m', 30, to].map(String)
+  running++
   const p = spawn(to.includes(':') ? 'traceroute6' : 'traceroute', args)
   res.on('close', () => p.kill())
 
@@ -236,6 +243,7 @@ export function trace(req, res) {
   createInterface({ input: p.stdout }).on('line', l => header(l) || parse(l))
   p.on('error', e => (err = e.message)) // traceroute missing; 'close' still follows
   p.on('close', async code => {
+    running--
     await Promise.all(lookups) // the destination's name resolves after traceroute exits
     const reached = !!hop?.replies.some(r => r.ip === dest)
     // The pod network has no IPv6, so traceroute can't open a socket toward an IPv6 address.
