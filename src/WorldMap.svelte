@@ -1,6 +1,6 @@
 <script>
   import { untrack } from 'svelte'
-  import { geoNaturalEarth1, geoPath, geoGraticule10, geoInterpolate, geoDistance } from 'd3-geo'
+  import { geoNaturalEarth1, geoPath, geoGraticule10, geoInterpolate, geoDistance, geoStream } from 'd3-geo'
   import { feature, mesh } from 'topojson-client'
   import { Spring } from 'svelte/motion'
   import { cubicInOut, sineInOut, backOut } from 'svelte/easing'
@@ -16,6 +16,7 @@
   const W = 1000 // projected width of the world, in map units
   const ZOOM = [Math.log(1), Math.log(2500)] // limits of log(view width)
   const REGION = Math.log(45) // how close a selected hop is shown
+  const CELL = 100 // map units: the land comes in pieces by cell, so that drawing a view skips those off screen
 
   let w = $state(0)
   let h = $state(0)
@@ -34,9 +35,53 @@
   })
   let projection = $derived(geoNaturalEarth1().rotate([-(lon ?? 0), 0]).fitWidth(W, sphere))
   let path = $derived(geoPath(projection))
-  let base = $derived(lon != null && { sphere: path(sphere), graticule: path(graticule), land: path(land), borders: path(borders) })
+  let base = $derived(lon != null && { sphere: path(sphere), graticule: path(graticule), ...pieces() })
   let bounds = $derived(path.bounds(sphere))
   const xy = p => projection(Array.isArray(p) ? p : ll(p))
+
+  // pieces returns the land, its coast and the borders as paths, one per cell of the map
+  // they fall in. The land fills by whole parts, as the map's edge cuts it, each with the
+  // holes it holds (the Caspian); the coast and borders are cut where they cross cells.
+  function pieces() {
+    const polygons = project(land)
+    const fill = {}
+    for (const rings of polygons) {
+      const holes = rings.filter(r => area(r) < 0)
+      for (const r of rings.filter(r => area(r) > 0)) put(fill, r[0], [r, ...holes.filter(h => inside(h[0], r))].map(r => svg(r, 'Z')).join(''))
+    }
+    return { land: joined(fill), coast: cut(polygons.flat(), true), borders: cut(project(borders).flat()) }
+  }
+
+  // project returns the object's projected lines, as one group, then each polygon's rings.
+  function project(object) {
+    const groups = [[]]
+    geoStream(object, projection.stream({ polygonStart: () => groups.push([]), polygonEnd() {}, lineStart: () => groups.at(-1).push([]), lineEnd() {}, point: (x, y) => groups.at(-1).at(-1).push([x, y]) }))
+    return groups
+  }
+
+  // cut splits lines where they pass into another cell; a ring that stays in its cell stays closed.
+  function cut(lines, closed) {
+    const cells = {}
+    for (const line of lines) {
+      const pts = closed ? [...line, line[0]] : line
+      let piece = [pts[0]]
+      for (const p of pts.slice(1)) {
+        piece.push(p)
+        if (cell(p) !== cell(piece[0])) put(cells, piece[0], svg(piece)), (piece = [p])
+      }
+      if (closed && piece.length === pts.length) put(cells, line[0], svg(line, 'Z'))
+      else if (piece.length > 1) put(cells, piece[0], svg(piece))
+    }
+    return joined(cells)
+  }
+
+  const cell = ([x, y]) => Math.floor(x / CELL) * 100 + Math.floor(y / CELL)
+  const put = (cells, p, d) => (cells[cell(p)] ??= []).push(d)
+  const joined = cells => Object.values(cells).map(ds => ds.join(''))
+  const area = r => r.reduce((a, [x, y], i) => a + x * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * y, 0) // < 0 for a hole
+  const inside = ([x, y], r) => r.reduce((odd, [x0, y0], i) => { const [x1, y1] = r[(i + 1) % r.length]; return (y0 > y) !== (y1 > y) && x < x0 + ((y - y0) * (x1 - x0)) / (y1 - y0) ? !odd : odd }, false)
+  // as d3's geoPath writes it, to 3 decimals
+  const svg = (pts, end = '') => 'M' + pts.map(([x, y]) => `${Math.round(x * 1e3) / 1e3},${Math.round(y * 1e3) / 1e3}`).join('L') + end
   const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v))
 
   // The camera is [x, y, z]: the view's center in map units and the log of its
@@ -241,8 +286,8 @@
   // Animation state, advanced once per frame. The probe uncovers the route
   // as fast as hops arrive; every router it reaches sends a reply home.
   let now = $state(0)
-  let reach = 0 // radians of route uncovered
-  let arrived = {} // arrived[n]: time the probe reached hop n; by hop, as late host names split and merge stops
+  let reach = $state(0) // radians of route uncovered
+  let arrived = $state({}) // arrived[n]: time the probe reached hop n; by hop, as late host names split and merge stops
   let packets = [] // { pts, t0, dur, len, kind, n }: n is the hop at its far end, none for a flow
   let last // run the state above belongs to
   let lastFlow = 0
@@ -332,11 +377,26 @@
     return ll(pts[0])
   }
 
-  let scene = $derived(draw(now))
+  // The scene is drawn again only when what it shows changes, and every frame (by reading now)
+  // while a stop pops and ripples, for 650 ms after it's reached. Packets move every frame.
+  let scene = $derived.by(() => {
+    const t = untrack(() => now)
+    if (Object.values(arrived).some(a => t - a < 650)) now
+    return draw(t)
+  })
+  let labels = $derived(place(scene.labels, scene.stops.map(s => s.at)))
+  let traffic = $derived.by(() => {
+    const t = now
+    return packets.filter(p => t >= p.t0).map(p => {
+      const u = (t - p.t0) / p.dur
+      // a reply from a stop that a late host name moved past the probe waits for it
+      const at = u => xy(along(p.pts, Math.max(p.len * cubicInOut(clamp(u)), p.kind === 'reply' ? p.len - reach : 0)))
+      return { kind: p.kind, fade: Math.min(1, u * 8, (1 - u) * 8), trail: [0, 1, 2, 3].map(j => at(u - j * 0.02)) }
+    })
+  })
 
   function draw(t) {
     const total = stops.at(-1)?.d ?? 0
-    if (landed) reach = total // a late host name can move the end between steps
     const head = stops.length ? along(stops, reach) : null
     const line = [...stops.filter(s => s.d <= reach).map(ll), head]
     const shown = stops.flatMap((s, i) => {
@@ -352,7 +412,7 @@
     // the hop's own way in and out, which its stop's neighbours are only at the stop's edges
     const from = at ? at.hops[0] === selected && near[i - 1] : near[0]
     const to = at ? at.hops.at(-1) === selected && near[i + 1] : near[1]
-    const link = (a, b, kind) => a && b && { kind, d: path({ type: 'LineString', coordinates: [ll(a), ll(b)] }), arrow: arrow(a, b, kind) }
+    const link = (a, b, kind) => a && b && { kind, a, b, d: path({ type: 'LineString', coordinates: [ll(a), ll(b)] }) }
     const role = s => (s === at ? 'lit' : s === from ? 'from' : s === to ? 'to' : '')
     const legLabels = trip.flatMap(l => [
       l.long && l.from && l.to && { id: `+${l.hops[0]}`, at: xy(geoInterpolate(ll(l.from), ll(l.to))(0.5)), text: `+${fmt(l.long)} ms`, mid: true },
@@ -369,7 +429,7 @@
       waiting: reach === total, // probe is at the newest hop, waiting for the next
       stops: shown.map(s => ({ ...s, role: selected ? role(stops[s.i]) || 'dim' : '' })),
       // Most important first: a label that would overlap an earlier one is dropped.
-      labels: place([
+      labels: [
         target && { id: 'target', at: xy(target), text: `${run.me ? 'You' : run.to} · ${city(target) ?? target.ip}`, short: run.me ? 'You' : run.to, force: true },
         ...shown.filter(s => s.lit && s.i).map(s => ({ id: s.i, at: s.at, text: s.city, tag: tags(s.hops), force: true })),
         ...['from', 'to'].map(kind => {
@@ -392,13 +452,7 @@
         !selected && (run.status !== 'reached' || reach < total) && newest?.i && !newest.lit && { id: newest.i, at: newest.at, away: shown.at(-2).at, text: newest.city },
         // then, unless a hop is picked, what each long link adds, over its middle, and the places the legs name
         ...(selected ? [] : [...legLabels.filter(l => l.mid), ...legLabels.filter(l => !l.mid)]),
-      ], shown.map(s => s.at)),
-      packets: packets.filter(p => t >= p.t0).map(p => {
-        const u = (t - p.t0) / p.dur
-        // a reply from a stop that a late host name moved past the probe waits for it
-        const at = u => xy(along(p.pts, Math.max(p.len * cubicInOut(clamp(u)), p.kind === 'reply' ? p.len - reach : 0)))
-        return { kind: p.kind, fade: Math.min(1, u * 8, (1 - u) * 8), trail: [0, 1, 2, 3].map(j => at(u - j * 0.02)) }
-      }),
+      ],
     }
   }
 
@@ -409,7 +463,9 @@
   function place(labels, dots) {
     const width = text => [...text].reduce((w, c) => w + (c > '\u1100' && c !== '\u2013' ? 11.5 : 6.8), 0) // CJK is wide; tags' dash is not
     // Labels take their sides for the view the camera lands on, so they don't flip on the way.
-    const [cx, , cz] = flight?.to ?? camera.target
+    // Its target is read even mid-flight, so that they're placed again when a flight ends or a drag cuts it short.
+    const to = camera.target
+    const [cx, , cz] = flight?.to ?? to
     const [vx, vw] = [cx - Math.exp(cz) / 2, Math.exp(cz)]
     const k = vw / w
     const boxes = dots.map(([x, y]) => ({ x0: x / k - 6, y: y / k, w: 12 }))
@@ -474,11 +530,15 @@
     ondblclick={e => flight || zoom(...pos(e), 0.5, false)}
   >
     {#if view && base}
-      <g>
+      <g class="world">
         <path class="sphere" d={base.sphere} />
         <path class="graticule" d={base.graticule} />
-        <path class="land" d={base.land} />
-        <path class="borders" d={base.borders} />
+        {#each base.land as d}<path class="land" {d} />{/each}
+        <!-- --k restyles every path under it: only the strokes need it -->
+        <g style="--k: {k}">
+          {#each base.coast as d}<path class="coast" {d} />{/each}
+          {#each base.borders as d}<path class="borders" {d} />{/each}
+        </g>
       </g>
 
       {#if target && stops.length}
@@ -487,8 +547,9 @@
       <path class="route casing" d={scene.route} />
       <path class="route" d={scene.route} />
       {#each scene.links as l (l.kind)}
+        {@const a = arrow(l.a, l.b, l.kind)}
         <path class="link {l.kind}" d={l.d} />
-        <path class="arrow {l.kind}" d="M-4,-4.5 L2.5,0 L-4,4.5" transform="translate({l.arrow.at}) rotate({l.arrow.angle}) scale({k})" />
+        <path class="arrow {l.kind}" d="M-4,-4.5 L2.5,0 L-4,4.5" transform="translate({a.at}) rotate({a.angle}) scale({k})" />
       {/each}
 
       {#each scene.stops as s (s.i)}
@@ -497,7 +558,7 @@
         {/if}
       {/each}
 
-      {#each scene.packets as p}
+      {#each traffic as p}
         <g class={p.kind} opacity={p.fade}>
           {#each p.trail as at, j}
             <circle transform="translate({at}) scale({k})" r={(j ? 2.2 : 2.8) - j * 0.45} opacity={1 - j * 0.28} />
@@ -543,7 +604,7 @@
         </g>
       {/each}
 
-      {#each scene.labels as l (l.id)}
+      {#each labels as l (l.id)}
         <text
           class="label {l.kind}"
           class:target={l.id === 'target'}
@@ -604,6 +665,12 @@
     vector-effect: non-scaling-stroke;
   }
 
+  /* A touch hit-tests every shape under it, and the coast alone is 59,000 points.
+     Touches on the world land on the svg, which pans and zooms. */
+  .world {
+    pointer-events: none;
+  }
+
   .sphere {
     fill: none;
     stroke: #d8d6cf;
@@ -616,17 +683,29 @@
     stroke-width: 0.6;
   }
 
-  /* White land on paper needs its coast drawn once you zoom in. */
+  /* The land keeps its paths as they are while the camera zooms (a non-scaling stroke
+     rebuilds every piece at each step); --k, map units per px, keeps its strokes 0.6 px. */
+  .land,
+  .coast,
+  .borders {
+    vector-effect: none;
+  }
+
   .land {
     fill: var(--sheet);
+  }
+
+  /* White land on paper needs its coast drawn once you zoom in. */
+  .coast {
+    fill: none;
     stroke: #d3d1ca;
-    stroke-width: 0.6;
+    stroke-width: calc(0.6px * var(--k));
   }
 
   .borders {
     fill: none;
     stroke: #dcdad3;
-    stroke-width: 0.6;
+    stroke-width: calc(0.6px * var(--k));
   }
 
   .direct {
