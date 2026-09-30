@@ -45,12 +45,12 @@
   // The probes stopped short, but the destination answered on port 443.
   let knocked = $derived(run.status === 'stopped' && run.tcp)
 
+  // One line on a phone: the headline, the summary and the rows say the rest.
   let note = $derived.by(() => {
-    const at = seen ? `Last seen at hop ${seen.hop.n} in ${seen.at.city}.` : ''
-    if (run.status === 'tracing') return `Probing hop ${hops.length + 1}. ${at}`
+    if (run.status === 'tracing') return `Probing hop ${hops.length + 1}.${seen ? ` Last seen in ${seen.at.city}.` : ''}`
     if (run.status === 'reached') return `${run.me ? 'You' : 'The destination'} answered at hop ${hops.length}.`
-    if (knocked) return `Answered on port 443 in ${fmt(run.tcp.ms)} ms, not to probes. ${at}`
-    if (run.status === 'stopped') return `${at} No reply after that.`
+    if (knocked) return 'Answered on port 443, not to probes.'
+    if (run.status === 'stopped') return seen ? `Last seen at hop ${seen.hop.n} in ${seen.at.city}.` : ''
     return run.error
   })
 
@@ -81,7 +81,7 @@
 <section class="summary">
   <p class="subject">
     <span class="k">Tracking</span>
-    <span><b>{run.me ? 'You' : run.to}</b><code>{run.target?.ip}</code></span>
+    <span><b>{run.me ? 'You' : run.to}</b>{#if run.target?.ip !== run.to}<code>{run.target?.ip}</code>{/if}</span>
   </p>
   <h1 class={run.status} aria-live="polite">{HEADLINE[knocked ? 'reached' : run.status]}</h1>
   <p class="note">{note}</p>

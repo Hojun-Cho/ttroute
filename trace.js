@@ -155,7 +155,7 @@ export function trace(req, res) {
 
   send('start', { source: self && geo(self), me: to === me })
   if (!/^[\w.:-]+$/.test(to) || to[0] === '-') {
-    send('end', { error: `Not a host or IP address: ${to}` })
+    send('end', { error: 'Not a host or IP address.' }) // the page already shows what was typed
     return res.end()
   }
 
