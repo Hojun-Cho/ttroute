@@ -2,21 +2,22 @@
   import { untrack } from 'svelte'
   import { slide } from 'svelte/transition'
   import HopDetail from './HopDetail.svelte'
-  import { city, fmt, km, num, rtt, tooFar } from './lib.js'
+  import { city, fmt, km, num, rtt, steps, tooFar } from './lib.js'
 
-  let { source, run, spots, stops, target, selected = $bindable(), hovered = $bindable() } = $props()
+  let { source, run, spots, stops, trip, target, selected = $bindable(), hovered = $bindable(), leg = $bindable() } = $props()
 
   const JUMP = 20 // ms; a bigger step between hops usually means a long cable
   const HEADLINE = { tracing: 'In transit', reached: 'Delivered', stopped: 'No answer at the door', error: 'Trace failed' }
 
   let hops = $derived(run.hops)
+  let step = $derived(steps(hops))
   // One row per hop, except that a run of silent hops folds into one row.
   let rows = $derived.by(() => {
     const out = []
     let prev = null // last row that answered
     let org // last network seen
     let via = source // last hop placed, which later probes passed
-    for (const hop of hops) {
+    for (const [i, hop] of hops.entries()) {
       const r = hop.replies[0]
       if (!r) {
         if (out.at(-1)?.silent) out.at(-1).last = hop.n
@@ -25,7 +26,7 @@
       }
       const ms = rtt(hop)
       const row = { hop, r, ms, via, at: spots[hop.n - 1], entered: r.org && r.org !== org }
-      if (prev && ms - prev.ms > JUMP) row.jump = `+${fmt(ms - prev.ms)} ms since hop ${prev.hop.n}`
+      if (prev && step[i] > JUMP) row.jump = `+${fmt(step[i])} ms since hop ${prev.hop.n}`
       out.push((prev = row))
       if (r.org) org = r.org
       if (row.at && !row.at.near) via = row.at
@@ -35,12 +36,17 @@
   let answered = $derived(rows.filter(x => x.r))
   let last = $derived(answered.at(-1))
   let seen = $derived(answered.findLast(x => x.at)) // the last hop placed, like a parcel's last scan
-  let nets = $derived(answered.filter(x => x.entered))
+  let dest = $derived(answered.findLast(x => x.hop.replies.some(r => r.ip === run.target?.ip))?.hop.n)
   let routeKm = $derived((stops.at(-1)?.d ?? 0) * 6371)
   let directKm = $derived(stops.length > 1 ? km(stops[0], stops.at(-1)) : 0)
   let open = $derived(rows.findIndex(x => x.hop.n === selected))
   let before = $derived(open > 0 ? rows.slice(0, open).findLast(x => x.r) : null)
   let after = $derived(open >= 0 ? rows.slice(open + 1).find(x => x.r) : null)
+  let shown = $derived(trip.find(l => l.hops.includes(selected ?? leg))) // the leg open in the list
+  // A hop picked, here or on the map, opens its leg, which stays open when it's put down.
+  $effect(() => {
+    if (selected != null) leg = selected
+  })
 
   // The probes stopped short, but the destination answered on port 443.
   let knocked = $derived(run.status === 'stopped' && run.tcp)
@@ -60,7 +66,7 @@
   // A second line only when it says something new.
   const sub = x =>
     [
-      x.entered && x.r.org,
+      x.entered && short(x.r.org),
       x.r.ip === run.target?.ip && (run.me ? 'you' : 'destination'),
       x.r.anycast && `anycast, ${x.r.anycast.length} sites`,
       (!x.at || x.at.near) && tooFar(x.r, source, x.via) && `not ${city(x.r)}: too fast`,
@@ -70,11 +76,26 @@
       .join(' · ')
   const toggle = n => (selected = selected === n ? null : n)
 
-  // Keep the live row in view while tracing, unless the reader is on a hop.
+  // A leg is a few hops told as one stretch: where it went, what it took, who carried it.
+  const span = ns => (ns.length > 1 ? `${ns[0]}–${ns.at(-1)}` : ns[0])
+  const title = l =>
+    l.silent ? 'No reply' : l.from ? [l.from, l.to].filter(Boolean).map(city).join(' → ') : l.near ? `near ${city(l.near)}` : 'Unknown place'
+  const about = l =>
+    [...l.nets.map(short), l.quiet && `${l.quiet} no reply`, l.hops.includes(dest) && (run.me ? 'you' : 'destination')]
+      .filter(Boolean)
+      .join(' · ')
+  // A legal suffix says nothing about the route: KDDI CORPORATION is KDDI.
+  const short = org => org.replace(/,?\s+(Inc|Corp(oration)?|Co|Ltd|Limited|LLC|GmbH|AG|AB|SAS?|B\.?V|e\.?V|S\.?A)\.?$/i, '')
+  const fold = l => {
+    leg = l === shown ? null : l.hops[0]
+    selected = null
+  }
+
+  // Keep the live row in view while tracing, unless the reader is on a hop or a leg.
   // Desktop only: on phones the page itself scrolls.
   $effect(() => {
-    if (hops.length && innerWidth > 860 && untrack(() => selected == null && hovered == null))
-      document.querySelector('.hops > li:last-child')?.scrollIntoView({ block: 'nearest' })
+    if (hops.length && innerWidth > 860 && untrack(() => selected == null && hovered == null && leg == null))
+      document.querySelector('.legs > li:last-child')?.scrollIntoView({ block: 'nearest' })
   })
 </script>
 
@@ -113,53 +134,73 @@
           {#if directKm > 50}<small>{(routeKm / directKm).toFixed(1)} × the straight line</small>{/if}
         {/if}
       </dd>
-      <dt>Networks</dt>
-      {#each nets as x (x.hop.n)}
-        <dd>{x.r.org}<small>from hop {x.hop.n}</small></dd>
-      {:else}
-        <dd>—</dd>
-      {/each}
     </dl>
   {/if}
 </section>
 
 <div class="scroll">
   {#if hops.length}
-    <p class="thead"><span>Hop</span><span>Router</span><span>ms</span></p>
+    <p class="thead"><span>Hops</span><span>Route</span><span>ms</span></p>
   {/if}
-  <ol class="hops">
-    {#each rows as x (x.hop.n)}
-      <li
-        class:silent={x.silent}
-        class:entered={x.entered}
-        class:lit={hovered === x.hop.n}
-        class:open={selected === x.hop.n}
-        class:from={before === x}
-        class:to={after === x}
-      >
+  <ol class="legs">
+    {#each trip as l (l.hops[0])}
+      <li class="leg" class:silent={l.silent} class:lit={l !== shown && l.hops.includes(hovered)}>
         <button
-          id="hop-{x.hop.n}"
           class="row"
-          onclick={() => toggle(x.hop.n)}
-          onpointerenter={e => e.pointerType === 'mouse' && (hovered = x.hop.n)}
+          aria-expanded={l === shown}
+          onclick={() => fold(l)}
+          onpointerenter={e => e.pointerType === 'mouse' && (hovered = l.end ?? null)}
           onpointerleave={() => (hovered = null)}
         >
-          <span class="n">{x.hop.n}{x.silent && x.last > x.hop.n ? `–${x.last}` : ''}</span>
-          {#if x.silent}
-            <span class="where">No reply</span>
-            <span class="ms">* * *</span>
-          {:else}
-            <span class="where" class:unsure={!x.at || x.at.near}>{where(x)}</span>
-            <span class="ms">{fmt(x.ms)}</span>
-            {#if sub(x)}<span class="sub">{sub(x)}</span>{/if}
-          {/if}
+          <span class="n">{span(l.hops)}</span>
+          <span class="where" class:unsure={!l.from}>{title(l)}</span>
+          <span class="ms">{l.silent ? '* * *' : l.long ? `+${fmt(l.long)}` : fmt(l.ms)}</span>
+          {#if about(l)}<span class="sub">{about(l)}</span>{/if}
         </button>
 
-        {#if selected === x.hop.n}
-          <!-- once open, the whole hop scrolls into view, wherever it was selected -->
-          <div class="detail" transition:slide={{ duration: 120 }} onintroend={e => e.currentTarget.parentElement.scrollIntoView({ block: 'nearest' })}>
-            <HopDetail hop={x.hop} last={x.last} spot={x.at} via={x.via} {before} {after} {source} {run} />
-          </div>
+        {#if l === shown}
+          <!-- once open, the hop picked on the map, or else the whole leg, scrolls into view -->
+          <ol
+            class="hops"
+            transition:slide={{ duration: 120 }}
+            onintroend={e => (document.getElementById(`hop-${selected}`) ?? e.currentTarget).parentElement.scrollIntoView({ block: 'nearest' })}
+          >
+            {#each rows.filter(x => l.hops.includes(x.hop.n)) as x (x.hop.n)}
+              <li
+                class:silent={x.silent}
+                class:entered={x.entered}
+                class:lit={hovered === x.hop.n}
+                class:open={selected === x.hop.n}
+                class:from={before === x}
+                class:to={after === x}
+              >
+                <button
+                  id="hop-{x.hop.n}"
+                  class="row"
+                  onclick={() => toggle(x.hop.n)}
+                  onpointerenter={e => e.pointerType === 'mouse' && (hovered = x.hop.n)}
+                  onpointerleave={() => (hovered = null)}
+                >
+                  <span class="n">{x.hop.n}{x.silent && x.last > x.hop.n ? `–${x.last}` : ''}</span>
+                  {#if x.silent}
+                    <span class="where">No reply</span>
+                    <span class="ms">* * *</span>
+                  {:else}
+                    <span class="where" class:unsure={!x.at || x.at.near}>{where(x)}</span>
+                    <span class="ms">{fmt(x.ms)}</span>
+                    {#if sub(x)}<span class="sub">{sub(x)}</span>{/if}
+                  {/if}
+                </button>
+
+                {#if selected === x.hop.n}
+                  <!-- once open, the whole hop scrolls into view, wherever it was selected -->
+                  <div class="detail" transition:slide={{ duration: 120 }} onintroend={e => e.currentTarget.parentElement.scrollIntoView({ block: 'nearest' })}>
+                    <HopDetail hop={x.hop} last={x.last} spot={x.at} via={x.via} {before} {after} {source} {run} />
+                  </div>
+                {/if}
+              </li>
+            {/each}
+          </ol>
         {/if}
       </li>
     {/each}
@@ -318,13 +359,39 @@
     text-align: right;
   }
 
+  .legs,
   .hops {
     list-style: none;
   }
 
-  /* a rule where the packet changes hands, matching "Networks" above */
-  li.entered::before,
-  li.knock::before {
+  /* each leg under a rule, a stretch of its own */
+  .legs > li + li {
+    border-top: 1px solid var(--rule);
+  }
+
+  .leg > .row {
+    padding-block: 9px;
+  }
+
+  .leg > .row .where {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  /* a leg opens to its hops */
+  .leg > .row .n::before {
+    content: '›';
+    display: inline-block;
+    margin-right: 5px;
+    transition: rotate 0.12s;
+  }
+
+  .leg > [aria-expanded='true'] .n::before {
+    rotate: 90deg;
+  }
+
+  /* inside a leg, a rule where the packet changes hands */
+  li.entered::before {
     content: '';
     display: block;
     margin-left: calc(var(--gutter) + var(--label) + var(--gap));

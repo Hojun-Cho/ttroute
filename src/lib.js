@@ -73,6 +73,67 @@ export function route(source, spots) {
   return stops
 }
 
+const AREA_KM = 50 // one city and its exchanges: Tokyo and Yokohama, San Jose and Palo Alto
+const LONG_MS = 60 // a step this big is a long link: an ocean, or a continent coast to coast
+
+// steps returns what each answered hop adds to the round trip of the one before it,
+// from each hop's lowest round trip from there on, so that one slow reply isn't a
+// long link. Silent hops get null.
+export function steps(hops) {
+  const floor = []
+  hops.reduceRight((m, h, i) => (floor[i] = Math.min(m, rtt(h) ?? Infinity)), Infinity)
+  let prev
+  return hops.map((h, i) => {
+    if (!h.replies.length) return null
+    const s = prev == null ? 0 : floor[i] - floor[prev]
+    prev = i
+    return s
+  })
+}
+
+// legs tells the route in a few stretches: a stay in one area, on any networks; a run
+// from place to place on one network; and a long link, where the round trip grows by
+// more than LONG_MS, with the area it lands in. Places are the hops' own, not "near"
+// ones. Silent hops go with the hop that ends their silence; those at the end make a
+// leg of their own.
+export function legs(hops, spots) {
+  const step = steps(hops)
+  const out = []
+  const leg = (from, to, long = 0) => (out.push({ from, to, long, hops: [], nets: [], quiet: 0 }), out.at(-1))
+  let quiet = []
+  hops.forEach((h, i) => {
+    quiet.push(h.n)
+    if (!h.replies.length) return
+    const at = spots[i] && !spots[i].near ? { ...spots[i], n: h.n } : null
+    const net = h.replies[0].org
+    const away = p => at && (!p || km(at, p) > AREA_KM)
+    let l = out.at(-1)
+    const handover = net && l?.net && net !== l.net
+    if (!l) l = leg(at, null)
+    else if (step[i] > LONG_MS) l = leg(l.to ?? l.from, null, step[i])
+    else if (l.long) {
+      // a long link takes in the hops where it lands, until the route moves on
+      if (l.to && away(l.to)) l = leg(l.to, at)
+    } else if (!l.to) {
+      // a stay: any networks, in one area
+      if (!l.from) l.from = at
+      else if (away(l.from)) handover ? (l = leg(l.from, at)) : (l.to = at)
+    } else if (handover) l = leg(l.to, away(l.to) ? at : null)
+    else if (away(l.to)) l.to = at
+    if (l.long && !l.to && away(l.from)) l.to = at
+    l.hops.push(...quiet)
+    l.quiet += quiet.length - 1
+    for (const r of h.replies) if (r.org && !l.nets.includes(r.org)) l.nets.push(r.org)
+    l.net = net ?? l.net
+    l.near ??= spots[i] // names a leg with no place of its own
+    l.ms = rtt(h)
+    l.end = h.n
+    quiet = []
+  })
+  if (quiet.length) out.push({ hops: quiet, nets: [], quiet: quiet.length, silent: true })
+  return out
+}
+
 export const city = p => p.city?.replace(/\s*\(.*\)$/, '')
 export const fmt = ms => (ms == null ? '—' : ms < 10 ? ms.toFixed(1) : String(Math.round(ms)))
 export const num = n => Math.round(n).toLocaleString('en-US')

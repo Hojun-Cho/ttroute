@@ -1,17 +1,19 @@
 <script>
   import WorldMap from './WorldMap.svelte'
   import Hops from './Hops.svelte'
-  import { locate, place, route } from './lib.js'
+  import { legs, locate, place, route } from './lib.js'
 
   let source = $state(null) // the server, where every trace starts
   let run = $state({})
   let selected = $state(null) // hop number
   let hovered = $state(null)
+  let leg = $state(null) // the leg open in the list, by any hop in it
   let input = $state(new URLSearchParams(location.search).get('to') ?? '')
   let es
 
   let spots = $derived(locate(source, run.hops, run.names)) // each hop's place, or null
   let stops = $derived(route(source, spots))
+  let trip = $derived(legs(run.hops, spots))
   // Once the destination answers probes, its own place replaces the DB's guess;
   // when there is none (anycast), pin it where the route got to. An answer on
   // port 443 alone still checks the DB's place against that round trip. An
@@ -34,7 +36,7 @@
   function start(to = input.trim().replace(/^\w+:\/\/|[/?#].*$/g, '').replace(/^([^:]*):\d+$/, '$1')) {
     es?.close()
     input = to
-    selected = hovered = null
+    selected = hovered = leg = null
     run = { to, me: !to, target: null, hops: [], names: {}, tcp: null, status: 'tracing', error: null }
     const q = to ? '?to=' + encodeURIComponent(to) : ''
     history.replaceState(null, '', q || location.pathname)
@@ -70,7 +72,7 @@
 
 <main>
   <section class="stage">
-    <WorldMap {source} {target} {stops} {run} bind:selected bind:hovered />
+    <WorldMap {source} {target} {stops} {trip} {run} bind:selected bind:hovered />
   </section>
 
   <aside>
@@ -85,7 +87,7 @@
       <button>Trace</button>
     </form>
 
-    <Hops {source} {run} {spots} {stops} {target} bind:selected bind:hovered />
+    <Hops {source} {run} {spots} {stops} {trip} {target} bind:selected bind:hovered bind:leg />
   </aside>
 </main>
 

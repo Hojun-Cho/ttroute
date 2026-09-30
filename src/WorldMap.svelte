@@ -5,9 +5,9 @@
   import { Spring } from 'svelte/motion'
   import { cubicInOut, sineInOut, backOut } from 'svelte/easing'
   import world from 'world-atlas/countries-50m.json'
-  import { ll, city } from './lib.js'
+  import { ll, city, fmt } from './lib.js'
 
-  let { source, target, stops, run, selected = $bindable(), hovered = $bindable() } = $props()
+  let { source, target, stops, trip, run, selected = $bindable(), hovered = $bindable() } = $props()
 
   const sphere = { type: 'Sphere' }
   const land = feature(world, world.objects.land)
@@ -354,6 +354,13 @@
     const to = at ? at.hops.at(-1) === selected && near[i + 1] : near[1]
     const link = (a, b, kind) => a && b && { kind, d: path({ type: 'LineString', coordinates: [ll(a), ll(b)] }), arrow: arrow(a, b, kind) }
     const role = s => (s === at ? 'lit' : s === from ? 'from' : s === to ? 'to' : '')
+    const legLabels = trip.flatMap(l => [
+      l.long && l.from && l.to && { id: `+${l.hops[0]}`, at: xy(geoInterpolate(ll(l.from), ll(l.to))(0.5)), text: `+${fmt(l.long)} ms`, mid: true },
+      ...[l.from, l.to].map(p => {
+        const j = p ? shown.findIndex(s => s.hops.includes(p.n)) : -1
+        return j >= 0 && { id: shown[j].hops.includes(dest) ? 'target' : shown[j].i, at: shown[j].at, away: shown[j - 1]?.at, text: city(p) }
+      }),
+    ]).filter(Boolean)
     return {
       route: stops.length ? path({ type: 'LineString', coordinates: line }) : null,
       // the selected hop's way in and way out
@@ -363,7 +370,7 @@
       stops: shown.map(s => ({ ...s, role: selected ? role(stops[s.i]) || 'dim' : '' })),
       // Most important first: a label that would overlap an earlier one is dropped.
       labels: place([
-        target && { id: 'target', at: xy(target), text: run.me ? `You · ${city(target) ?? target.ip}` : run.to, force: true },
+        target && { id: 'target', at: xy(target), text: `${run.me ? 'You' : run.to} · ${city(target) ?? target.ip}`, short: run.me ? 'You' : run.to, force: true },
         ...shown.filter(s => s.lit && s.i).map(s => ({ id: s.i, at: s.at, text: s.city, tag: tags(s.hops), force: true })),
         ...['from', 'to'].map(kind => {
           const s = shown.find(s => !s.lit && role(stops[s.i]) === kind)
@@ -379,10 +386,13 @@
             at: shown[0].at,
             away: shown.find(s => Math.hypot(s.at[0] - shown[0].at[0], s.at[1] - shown[0].at[1]) > (20 * Math.exp(frame[2])) / w)?.at,
             text: `Server · ${shown[0].city ?? '?'}`,
+            short: 'Server',
           },
         // the newest stop, until the probe gets to the destination, which has its own label
         !selected && (run.status !== 'reached' || reach < total) && newest?.i && !newest.lit && { id: newest.i, at: newest.at, away: shown.at(-2).at, text: newest.city },
-      ]),
+        // then, unless a hop is picked, what each long link adds, over its middle, and the places the legs name
+        ...(selected ? [] : [...legLabels.filter(l => l.mid), ...legLabels.filter(l => !l.mid)]),
+      ], shown.map(s => s.at)),
       packets: packets.filter(p => t >= p.t0).map(p => {
         const u = (t - p.t0) / p.dur
         // a reply from a stop that a late host name moved past the probe waits for it
@@ -394,25 +404,35 @@
 
   // place puts each label on the side of its point away from the route,
   // else the other side, else nowhere, keeping labels on screen and apart.
-  function place(labels) {
-    const boxes = []
+  // A label that fits nowhere tries its short form, and the stops' dots count as taken,
+  // so that no name covers another place. A place named twice keeps its first label.
+  function place(labels, dots) {
     const width = text => [...text].reduce((w, c) => w + (c > '\u1100' && c !== '\u2013' ? 11.5 : 6.8), 0) // CJK is wide; tags' dash is not
     // Labels take their sides for the view the camera lands on, so they don't flip on the way.
     const [cx, , cz] = flight?.to ?? camera.target
     const [vx, vw] = [cx - Math.exp(cz) / 2, Math.exp(cz)]
     const k = vw / w
-    return labels.filter(Boolean).flatMap(l => {
+    const boxes = dots.map(([x, y]) => ({ x0: x / k - 6, y: y / k, w: 12 }))
+    const named = new Set()
+    return labels.filter(l => l && !named.has(l.id) && named.add(l.id)).flatMap(l => {
       const x = l.at[0] / k
-      const y = l.at[1] / k
-      const w = width(l.text + (l.tag ?? '')) + 6
-      for (const side of l.away?.[0] > l.at[0] ? [-1, 1] : [1, -1]) {
-        const x0 = side > 0 ? x + 10 : x - 10 - w
-        if (x0 < vx / k || x0 + w > (vx + vw) / k) continue
-        if (boxes.some(b => Math.abs(b.y - y) < 16 && b.x0 < x0 + w && x0 < b.x0 + b.w)) continue
-        boxes.push({ x0, y, w })
-        return [{ ...l, side }]
+      const y = l.at[1] / k - (l.mid ? 11 : 0) // a link's time sits over its line
+      for (const text of [l.text, l.short].filter(Boolean)) {
+        const w = width(text + (l.tag ?? '')) + 6
+        for (const side of l.mid ? [0] : l.away?.[0] > l.at[0] ? [-1, 1] : [1, -1]) {
+          const x0 = side > 0 ? x + 10 : side < 0 ? x - 10 - w : x - w / 2
+          if (x0 < vx / k || x0 + w > (vx + vw) / k) continue
+          if (boxes.some(b => Math.abs(b.y - y) < 16 && b.x0 < x0 + w && x0 < b.x0 + b.w)) continue
+          boxes.push({ x0, y, w })
+          return [{ ...l, text, side }]
+        }
       }
-      return l.force ? [{ ...l, side: x < (vx + vw) / k && x + 10 + w > (vx + vw) / k ? -1 : 1 }] : []
+      if (!l.force) return []
+      const text = l.short ?? l.text
+      const w = width(text + (l.tag ?? '')) + 6
+      const side = x < (vx + vw) / k && x + 10 + w > (vx + vw) / k ? -1 : 1
+      boxes.push({ x0: side > 0 ? x + 10 : x - 10 - w, y, w })
+      return [{ ...l, text, side }]
     })
   }
 
@@ -527,10 +547,11 @@
         <text
           class="label {l.kind}"
           class:target={l.id === 'target'}
+          class:mid={l.mid}
           transform="translate({l.at}) scale({k})"
           x={11 * l.side}
-          y="4"
-          text-anchor={l.side > 0 ? 'start' : 'end'}
+          y={l.mid ? -7 : 4}
+          text-anchor={l.side > 0 ? 'start' : l.side < 0 ? 'end' : 'middle'}
         >
           {l.text}{#if l.tag}<tspan dx="6">{l.tag}</tspan>{/if}
         </text>
@@ -731,6 +752,12 @@
 
   .label.to {
     fill: var(--accent);
+  }
+
+  /* the time a long link adds, over its line */
+  .label.mid {
+    fill: var(--ink-2);
+    font: 500 10.5px var(--mono);
   }
 
   .pulse {
