@@ -157,7 +157,7 @@
 
         {#if selected === x.hop.n}
           <!-- once open, the whole hop scrolls into view, wherever it was selected -->
-          <div class="detail" in:slide={{ duration: 120 }} onintroend={e => e.currentTarget.parentElement.scrollIntoView({ block: 'nearest' })}>
+          <div class="detail" transition:slide={{ duration: 120 }} onintroend={e => e.currentTarget.parentElement.scrollIntoView({ block: 'nearest' })}>
             <HopDetail hop={x.hop} last={x.last} spot={x.at} via={x.via} {before} {after} {source} {run} />
           </div>
         {/if}

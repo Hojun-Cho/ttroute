@@ -63,11 +63,17 @@
     return [keep((x0 + x1) / 2, vw, wx0, wx1), keep((y0 + y1) / 2, vh, wy0, wy1), Math.log(vw)]
   })
   $effect(() => {
-    if (w && h && !manual) {
-      flight = null
-      camera.set(frame) // the first set is instant
-    }
+    const f = frame // read first, so the view keeps following the route after a flight lands
+    if (w && h && !manual && !flight) camera.set(f) // the first set is instant
   })
+
+  // fit flies back to the frame, as a selection does, instead of springing across the map from close in.
+  function fit() {
+    const [x, y, z] = camera.current
+    fling = null
+    flight = Math.hypot(frame[0] - x, frame[1] - y) < k ? null : { ...fly([x, y, Math.exp(z)], [frame[0], frame[1], Math.exp(frame[2])]), to: frame }
+    manual = false
+  }
 
   // around returns the stops a hop sits among: [before, at, after] for a placed
   // hop, and for one that isn't (silent or mislocated) the placed hops either side.
@@ -82,8 +88,16 @@
   // Selecting a hop, here or in the list, flies to where it is, or for a hop
   // that isn't placed, to the last place the route was seen before it,
   // close enough that its nearest neighbor sits at least 60 px away.
+  // goal is a string so that the effect re-runs only when a late host name moves
+  // the hop, not on every new hop, which would pull back a reader who panned away.
+  let goal = $derived.by(() => {
+    const near = selected ? around(selected) : []
+    const s = near.find(s => s.hops.includes(selected)) ?? near[0]
+    return s && `${s.lon} ${s.lat}`
+  })
   $effect(() => {
     const n = selected
+    goal
     untrack(() => {
       const near = n ? around(n) : []
       const s = near.find(s => s.hops.includes(n)) ?? near[0]
@@ -207,7 +221,7 @@
   // as fast as hops arrive; every router it reaches sends a reply home.
   let now = $state(0)
   let reach = 0 // radians of route uncovered
-  let arrived = [] // arrived[i]: time the probe reached stops[i]
+  let arrived = {} // arrived[n]: time the probe reached hop n; by hop, as late host names split and merge stops
   let packets = [] // { pts, t0, dur, len, kind, n }: n is the hop at its far end, none for a flow
   let last // run the state above belongs to
   let lastFlow = 0
@@ -226,7 +240,10 @@
   })
 
   function step(t, dt) {
-    if (run !== last) [last, reach, arrived, packets, manual, landed] = [run, 0, [], [], false, false]
+    if (run !== last) {
+      ;[last, reach, arrived, packets, landed] = [run, 0, {}, [], false]
+      if (manual) fit()
+    }
     if (fling) {
       const [vx, vy] = fling
       pan(vx * dt * 1000, vy * dt * 1000)
@@ -238,16 +255,20 @@
       // sineInOut peaks at half cubicInOut's speed, so even a trip across the world is easy to follow
       const [x, y, vw] = flight.at(sineInOut(u) * flight.S)
       camera.set([x, y, Math.log(vw)], { instant: true })
-      if (u === 1) flight = null
+      if (u === 1) {
+        flight = null
+        if (!manual) camera.set(frame) // the route may have grown on the way
+      }
     }
     const total = stops.at(-1)?.d ?? 0
     // Hurry when behind. Once the probe is at a destination that answered, a late
     // host name that moves a stop redraws the route without sending the probe out again.
     reach = landed ? total : Math.min(total, reach + Math.max(1.2, (total - reach) * 6) * dt)
     landed = run.status === 'reached' && reach === total
-    for (let i = arrived.length; i < stops.length && stops[i].d <= reach; i++) {
-      arrived[i] = t
-      if (i) packets.push(packet(stops.slice(0, i + 1).reverse(), t, 'reply', stops[i].hops[0]))
+    for (const [i, s] of stops.entries()) {
+      if (s.d > reach) break
+      if (i && !s.hops.some(n => arrived[n])) packets.push(packet(stops.slice(0, i + 1).reverse(), t, 'reply', s.hops[0]))
+      for (const n of s.hops) arrived[n] ??= t
     }
     // Once the route is known, traffic keeps flowing along it; with a hop
     // selected, its own exchange repeats instead: a probe out, the reply back.
@@ -288,11 +309,12 @@
 
   function draw(t) {
     const total = stops.at(-1)?.d ?? 0
+    if (landed) reach = total // a late host name can move the end between steps
     const head = stops.length ? along(stops, reach) : null
     const line = [...stops.filter(s => s.d <= reach).map(ll), head]
     const shown = stops.flatMap((s, i) => {
-      if (arrived[i] == null) return []
-      const age = t - arrived[i]
+      const age = t - Math.min(...s.hops.map(n => arrived[n] ?? t + 1)) // a stop shows once any of its hops arrived
+      if (age < 0) return []
       const lit = s.hops.includes(hovered) || s.hops.includes(selected)
       return [{ ...s, i, at: xy(s), pop: backOut(clamp(age / 280)), ripple: age / 650, lit }]
     })
@@ -348,8 +370,9 @@
   function place(labels) {
     const boxes = []
     const width = text => [...text].reduce((w, c) => w + (c > '\u1100' && c !== '\u2013' ? 11.5 : 6.8), 0) // CJK is wide; tags' dash is not
-    // Mid-flight, labels take their sides for the view it lands on, so they don't flip on the way.
-    const [vx, vw] = flight ? [flight.to[0] - Math.exp(flight.to[2]) / 2, Math.exp(flight.to[2])] : [view[0], view[2]]
+    // Labels take their sides for the view the camera lands on, so they don't flip on the way.
+    const [cx, , cz] = flight?.to ?? camera.target
+    const [vx, vw] = [cx - Math.exp(cz) / 2, Math.exp(cz)]
     const k = vw / w
     return labels.filter(Boolean).flatMap(l => {
       const x = l.at[0] / k
@@ -375,7 +398,7 @@
     // a straight line between the ends is wrong when the link crosses the map's seam
     const [s, e] = kind === 'in' ? [0.999, 1] : [0, 0.001]
     const px = Math.hypot(xy(along(e))[0] - xy(along(s))[0], xy(along(e))[1] - xy(along(s))[1]) / k / 0.001
-    const u = px < 100 || kind === 'gap' ? 0.5 : kind === 'in' ? 1 - 40 / px : 40 / px
+    const u = kind === 'gap' ? 0.5 : kind === 'in' ? Math.max(0.5, 1 - 40 / px) : Math.min(0.5, 40 / px)
     const [p, q] = [xy(along(u - 0.005)), xy(along(u + 0.005))]
     return { at: xy(along(u)), angle: (Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI }
   }
@@ -396,7 +419,7 @@
     onpointermove={move}
     onpointerup={up}
     onpointercancel={up}
-    ondblclick={e => zoom(...pos(e), 0.5, false)}
+    ondblclick={e => flight || zoom(...pos(e), 0.5, false)}
   >
     {#if view}
       <g>
@@ -488,7 +511,7 @@
   <div class="controls">
     <button onclick={() => zoom(w / 2, h / 2, 0.5, false)} aria-label="Zoom in">+</button>
     <button onclick={() => zoom(w / 2, h / 2, 2, false)} aria-label="Zoom out">−</button>
-    <button onclick={() => (manual = false)} disabled={!manual}>Fit route</button>
+    <button onclick={fit} disabled={!manual}>Fit route</button>
   </div>
 
   <ul class="legend">
