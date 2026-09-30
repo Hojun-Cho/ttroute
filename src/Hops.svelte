@@ -47,7 +47,7 @@
 
   // One line on a phone: the headline, the summary and the rows say the rest.
   let note = $derived.by(() => {
-    if (run.status === 'tracing') return `Probing hop ${hops.length + 1}.${seen ? ` Last seen in ${seen.at.city}.` : ''}`
+    if (run.status === 'tracing') return seen ? `Last seen in ${seen.at.city}.` : `Probing hop ${hops.length + 1}.`
     if (run.status === 'reached') return `${run.me ? 'You' : 'The destination'} answered at hop ${hops.length}.`
     if (knocked) return 'Answered on port 443, not to probes.'
     if (run.status === 'stopped') return seen ? `Last seen at hop ${seen.hop.n} in ${seen.at.city}.` : ''
@@ -258,9 +258,13 @@
     color: var(--accent);
   }
 
+  /* one line even for a long city, so the list below never shifts */
   .note {
     margin-top: 6px;
     color: var(--ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .summary dl {

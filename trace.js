@@ -162,7 +162,7 @@ export function trace(req, res) {
     return res.end()
   }
   if (running >= MAX_TRACES) {
-    send('end', { error: 'Too many traces right now. Try again in a moment.' })
+    send('end', { error: 'Too many traces right now.' })
     return res.end()
   }
 
