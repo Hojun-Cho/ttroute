@@ -77,10 +77,11 @@
     <form
       onsubmit={e => {
         e.preventDefault()
+        if (matchMedia('(pointer: coarse)').matches) document.activeElement.blur() // puts a phone's keyboard away
         start()
       }}
     >
-      <input bind:value={input} placeholder="Host or IP · empty for you" aria-label="Host or IP address" spellcheck="false" autocomplete="off" />
+      <input bind:value={input} placeholder="Host or IP · empty for you" aria-label="Host or IP address" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" />
       <button>Trace</button>
     </form>
 
@@ -161,6 +162,11 @@
     aside {
       display: block;
       border-left: 0;
+    }
+
+    /* iOS zooms into a field whose text is under 16px */
+    input {
+      font-size: 16px;
     }
   }
 </style>
