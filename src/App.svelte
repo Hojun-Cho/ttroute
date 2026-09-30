@@ -126,6 +126,7 @@
     padding: 0 10px;
     outline: none;
     font: 13.5px var(--mono);
+    font-variant-ligatures: none; /* Chivo Mono would join ff, fl and ffi in hosts and ::ffff: */
   }
 
   input::placeholder {

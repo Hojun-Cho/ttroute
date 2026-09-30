@@ -60,7 +60,6 @@ body {
   font: 14px/1.45 var(--sans);
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
-  font-variant-ligatures: none; /* Chivo Mono would join the ff pairs in ::ffff: addresses */
 }
 
 button,

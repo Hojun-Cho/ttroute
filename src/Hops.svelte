@@ -230,12 +230,14 @@
 
   .subject b {
     font: 500 15px var(--mono);
+    font-variant-ligatures: none; /* Chivo Mono would join ff, fl and ffi in hosts and ::ffff: */
   }
 
   .subject code {
     margin-left: 10px;
     color: var(--ink-3);
     font: 13px var(--mono);
+    font-variant-ligatures: none;
   }
 
   h1,

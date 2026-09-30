@@ -115,6 +115,7 @@
 
   .mono {
     font: 12.5px var(--mono);
+    font-variant-ligatures: none; /* Chivo Mono would join ff, fl and ffi in hosts and ::ffff: */
   }
 
   .from {
