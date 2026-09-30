@@ -31,7 +31,10 @@ export function place(r, name, source, via) {
   }
   if (name?.place && fits(name.place, ms, source, via)) return { ...name.place, from: 'host name' }
   if (r.ipmap && fits(r.ipmap, ms, source, via)) return { ...r.ipmap, from: 'RIPE IPmap' }
-  if (r.lat != null && fits(r, ms, source, via)) return { city: city(r), cc: r.cc, lat: r.lat, lon: r.lon, from: 'database' }
+  // The database misplaces backbone routers often enough that its city must also be
+  // reachable in the time added since the last hop placed, not only from the source.
+  if (r.lat != null && fits(r, ms, source, via) && (!via || km(via, r) <= reachKm(Math.max(0, ms - (via.ms ?? 0)))))
+    return { city: city(r), cc: r.cc, lat: r.lat, lon: r.lon, from: 'database' }
   return null
 }
 
