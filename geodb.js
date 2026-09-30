@@ -13,7 +13,8 @@ const MIN_ROWS = 900_000 // some daily dumps are partial; a full one has about 1
 
 mkdirSync('data', { recursive: true })
 // curl -f writes nothing on failure, so a failed download never replaces a working file.
-const get = (url, file) => execSync(`curl -sfo ${file} ${url}`)
+// -y 60 gives up on one stalled for a minute, which would otherwise hold a pod in init forever.
+const get = (url, file) => execSync(`curl -sf --connect-timeout 20 -y 60 -o ${file} ${url}`)
 
 // DB-IP publishes on the 1st; until then, last month's file is the latest.
 const now = new Date()
