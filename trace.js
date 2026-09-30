@@ -119,7 +119,8 @@ const ROLES = [
 // its last city code (labels run from port to metro, and an earlier site code
 // like Telstra's stl or lon can clash), and what kind of router and port it is.
 function hint(host) {
-  const labels = host.toLowerCase().split('.').slice(0, -2) // not the domain, which may be anything
+  // not the domain, which may be anything, nor DFN's network name "x-win", which isn't Vienna
+  const labels = host.toLowerCase().split('.').slice(0, -2).filter(l => l !== 'x-win')
   const tokens = labels.flatMap(l => l.split('-'))
   const place = tokens.map(t => codes.get(t.replace(/\d+$/, ''))).findLast(Boolean)
   const role = ROLES.find(([re]) => tokens.some(t => re.test(t)))?.[1]
