@@ -20,11 +20,22 @@
   let w = $state(0)
   let h = $state(0)
 
-  // Centered on the server, so routes leaving it rarely cross the map's edge.
-  let lon = $derived(source?.lon ?? 0) // a number, so a new source object doesn't redraw the world
-  let projection = $derived(geoNaturalEarth1().rotate([-lon, 0]).fitWidth(W, sphere))
+  // Centered on the server, so routes leaving it rarely cross the map's edge; but routes
+  // to places 110–180° west of it mostly go the other way round, over the Americas, so
+  // those center 110° east of it. Projecting the world takes a long frame, so only a
+  // target that needs the other center moves it, and nothing is drawn until one is known.
+  let lon = $state(null)
+  $effect(() => {
+    const s = source?.lon ?? 0
+    const t = run.target
+    if (t) {
+      const west = (s - t.lon + 360) % 360
+      lon = !t.anycast && west > 110 && west <= 180 ? s + 110 : s
+    } else if (lon == null && run.status !== 'tracing') lon = s
+  })
+  let projection = $derived(geoNaturalEarth1().rotate([-(lon ?? 0), 0]).fitWidth(W, sphere))
   let path = $derived(geoPath(projection))
-  let base = $derived({ sphere: path(sphere), graticule: path(graticule), land: path(land), borders: path(borders) })
+  let base = $derived(lon != null && { sphere: path(sphere), graticule: path(graticule), land: path(land), borders: path(borders) })
   let bounds = $derived(path.bounds(sphere))
   const xy = p => projection(Array.isArray(p) ? p : ll(p))
   const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v))
@@ -421,7 +432,7 @@
     onpointercancel={up}
     ondblclick={e => flight || zoom(...pos(e), 0.5, false)}
   >
-    {#if view}
+    {#if view && base}
       <g>
         <path class="sphere" d={base.sphere} />
         <path class="graticule" d={base.graticule} />
