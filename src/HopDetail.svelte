@@ -26,7 +26,7 @@
   {@const min = Math.min(...r.ms)}
   <dl>
     <dt>Reply</dt>
-    <dd>{r.ip === run.target?.ip ? 'Echo reply' : 'Time exceeded'}<small class="mono">{r.ms.map(fmt).join(' ')} ms</small></dd>
+    <dd>{r.tcp ? 'Handshake on port 443' : r.ip === run.target?.ip ? 'Echo reply' : 'Time exceeded'}<small class="mono">{r.ms.map(fmt).join(' ')} ms</small></dd>
     <dt>IP</dt>
     <dd><span class="mono">{r.ip}</span><small>{r.kind}</small></dd>
     {#if r.net}

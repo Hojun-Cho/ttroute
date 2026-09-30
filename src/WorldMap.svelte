@@ -97,6 +97,8 @@
   // around returns the stops a hop sits among: [before, at, after] for a placed
   // hop, and for one that isn't (silent or mislocated) the placed hops either side.
   function around(n) {
+    // A destination that answered only on port 443 comes after the hops, with its way in unknown.
+    if (n > run.hops.length) return target ? [stops.at(-1), { ...target, hops: [n], gap: true }].filter(Boolean) : []
     const i = stops.findIndex(s => s.hops.includes(n))
     if (i >= 0) return stops.slice(Math.max(0, i - 1), i + 2)
     const a = stops.findLastIndex(s => s.hops.some(h => h < n))
@@ -355,7 +357,7 @@
     return {
       route: stops.length ? path({ type: 'LineString', coordinates: line }) : null,
       // the selected hop's way in and way out
-      links: (at ? [link(from, at, 'in'), link(at, to, 'out')] : [link(from, to, 'gap')]).filter(Boolean),
+      links: (at ? [link(from, at, at.gap ? 'gap' : 'in'), link(at, to, 'out')] : [link(from, to, 'gap')]).filter(Boolean),
       head: head && (run.status === 'tracing' || reach < total) ? xy(head) : null,
       waiting: reach === total, // probe is at the newest hop, waiting for the next
       stops: shown.map(s => ({ ...s, role: selected ? role(stops[s.i]) || 'dim' : '' })),
@@ -428,7 +430,12 @@
     return { at: xy(along(u)), angle: (Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI }
   }
 
-  const pick = s => s.hops.find(n => n > 0) ?? null
+  // the destination's hop: where it answered probes, or after the last hop when only port 443 answered
+  let dest = $derived.by(() => {
+    const i = run.hops.findLastIndex(h => h.replies.some(r => r.ip === run.target?.ip))
+    return i >= 0 ? i + 1 : run.status === 'stopped' && run.tcp ? run.hops.length + 1 : null
+  })
+  const pick = s => (s.hops.includes(dest) ? dest : s.hops.find(n => n > 0)) ?? null
   // tags writes hop numbers with each run of consecutive ones as a range: "#1–7", "#5 #7–8".
   const tags = ns => ns.reduce((t, n, i) => t + (ns[i - 1] === n - 1 ? (ns[i + 1] === n + 1 ? '' : `–${n}`) : ` #${n}`), '').trim()
 </script>
@@ -480,7 +487,13 @@
 
       {#if target}
         {#key target.lat}
-          <g transform="translate({xy(target)}) scale({k})">
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <g
+            class:dest
+            transform="translate({xy(target)}) scale({k})"
+            onclick={() => dragged || !dest || (selected = selected === dest ? null : dest)}
+          >
+            <circle class="hit" r="12" />
             <g class="target" class:reached={run.status === 'reached' || run.tcp}>
               {#if run.status === 'tracing'}
                 <circle class="pulse" r="6" />
@@ -659,7 +672,8 @@
     fill: var(--accent);
   }
 
-  .stop {
+  .stop,
+  .dest {
     cursor: pointer;
   }
 

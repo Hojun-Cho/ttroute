@@ -165,13 +165,21 @@
     {/each}
 
     {#if knocked}
-      <li class="knock">
-        <div class="row">
+      <!-- the destination, as the hop after the last one probed; the map selects it by the same number -->
+      {@const n = hops.length + 1}
+      <li class="knock" class:open={selected === n}>
+        <button id="hop-{n}" class="row" onclick={() => toggle(n)}>
           <span class="n">443</span>
           <span class="where">{target ? `${target.city}, ${target.cc}` : run.target?.ip}</span>
           <span class="ms">{fmt(run.tcp.ms)}</span>
           <span class="sub">{run.me ? 'you' : 'destination'} · answered on port 443, not to probes</span>
-        </div>
+        </button>
+
+        {#if selected === n}
+          <div class="detail" transition:slide={{ duration: 120 }} onintroend={e => e.currentTarget.parentElement.scrollIntoView({ block: 'nearest' })}>
+            <HopDetail hop={{ n, sent: 1, replies: [{ ...run.target, ms: [run.tcp.ms], tcp: true }] }} last={n} spot={target} via={stops.at(-1)} before={last} {source} {run} />
+          </div>
+        {/if}
       </li>
     {/if}
 
