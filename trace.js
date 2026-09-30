@@ -20,8 +20,13 @@ const dns = new Resolver({ timeout: 1000, tries: 1 })
 const PROBES = 3 // per hop
 const MAX_SILENT = 8 // give up after this many silent hops in a row; clouds like Azure hide ~7
 
-// Every trace starts here, so the map needs to know where "here" is.
-const self = process.env.SELF_IP || (await fetch('https://api.ipify.org').then(r => r.text()).catch(() => null))
+// Every trace starts here, so the map needs to know where "here" is. An error page is
+// not an address, and a lookup that failed at startup is tried again by later traces.
+const lookup = () =>
+  fetch('https://api.ipify.org', { signal: AbortSignal.timeout(5000) })
+    .then(r => r.text())
+    .then(ip => (isIP(ip) ? ip : null), () => null)
+let self = process.env.SELF_IP || (await lookup())
 
 function geo(ip) {
   const c = cities.get(ip)
@@ -141,6 +146,7 @@ const clientIP = req =>
   (req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket.remoteAddress).replace(/^::ffff:/, '')
 
 export function trace(req, res) {
+  if (!self) lookup().then(ip => (self ||= ip))
   const me = clientIP(req)
   const to = new URL(req.url, 'http://x').searchParams.get('to') || me
 
