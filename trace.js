@@ -15,7 +15,8 @@ const optional = (file, none) => (existsSync(file) ? readFileSync(file) : none)
 const ipmap = { 4: optional('data/ipmap4.bin', Buffer.alloc(0)), 16: optional('data/ipmap6.bin', Buffer.alloc(0)) }
 const ipmapPlaces = JSON.parse(optional('data/ipmap-places.json', '[]'))
 const anycast = JSON.parse(optional('data/anycast.json', '{"prefixes":{}}'))
-const dns = new Resolver({ timeout: 1000, tries: 1 })
+// Two tries: a cold look-up can take over a second, and recorded traces lost names that exist.
+const dns = new Resolver({ timeout: 1000, tries: 2 })
 
 const PROBES = 3 // per hop
 const MAX_SILENT = 8 // give up after this many silent hops in a row; clouds like Azure hide ~7
