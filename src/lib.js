@@ -4,6 +4,7 @@ const EARTH_KM = 6371
 const SAME_PLACE_KM = 15 // the DB often gives one city several points a few km apart
 const NEAR_MS = 3 // a hop this little slower than a placed one is within ~300 km of it
 const AREA_KM = 50 // one city and its exchanges: Tokyo and Yokohama, San Jose and Palo Alto
+const DETOUR = 2.5 // a router this many times slower than straight fiber from the server answered the long way round
 
 export const ll = p => [p.lon, p.lat]
 export const km = (a, b) => geoDistance(ll(a), ll(b)) * EARTH_KM
@@ -52,7 +53,9 @@ export const rtt = hop => {
 // last anchor, near that one. A hop placed is firm, and anchors the later ones,
 // unless it is a database city away from the last anchor's area: few routers that
 // move the route are where the database says. An anchor is sure when its host name
-// placed it, or it stayed in the last one's area and answered barely later.
+// placed it and its RTT is not a detour (through a tunnel, or a slow reply, it says
+// nothing of how far the next hop is), or it stayed in the last one's area and
+// answered barely later.
 export function locate(source, hops, names) {
   let last = source?.lat != null ? { city: city(source), cc: source.cc, lat: source.lat, lon: source.lon, n: 0, ms: 0 } : null
   return hops.map(h => {
@@ -62,7 +65,8 @@ export function locate(source, hops, names) {
       const ms = Math.min(...r.ms)
       const stays = last && km(last, p) <= AREA_KM
       const firm = p.from !== 'database' || stays
-      const sure = p.from === 'host name' || (stays && ms - last.ms <= NEAR_MS)
+      const detour = source?.lat != null && ms > (km(source, p) / 100) * DETOUR + NEAR_MS
+      const sure = (p.from === 'host name' && !detour) || (stays && ms - last.ms <= NEAR_MS)
       const spot = { ...p, n: h.n, ms, firm, sure }
       if (firm) last = spot
       return spot
