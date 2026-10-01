@@ -33,6 +33,7 @@
   })
   const world = new Worker(new URL('./land.js', import.meta.url), { type: 'module' })
   world.onmessage = ({ data }) => data.lon === want && (recenter(data.lon), (base = data))
+  $effect(() => () => world.terminate()) // a dev server's hot update makes a new map, and a new worker
   $effect(() => {
     if (want !== lon) world.postMessage(want)
   })
