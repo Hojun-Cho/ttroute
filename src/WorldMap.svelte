@@ -70,6 +70,7 @@
     let d = ''
     let total = 0
     let from // map units along its piece to where the part in view starts
+    let ended = false // the part in view has ended: the line coming back would need a second dash offset
     for (const pts of pieces) {
       const out = []
       let at = 0
@@ -86,13 +87,15 @@
           else t1 = Math.min(t1, q / p)
         }
         if (t0 < t1) {
-          if (!out.length) (from ??= at + t0 * len), out.push([ax + t0 * dx, ay + t0 * dy])
+          if (ended) return { d: direct } // it leaves the view and comes back (it turns near a pole): drawn whole
+          if (!out.length) (from = at + t0 * len), out.push([ax + t0 * dx, ay + t0 * dy])
           out.push([ax + t1 * dx, ay + t1 * dy])
-        }
+          ended = t1 < 1
+        } else if (out.length) ended = true
         at += len
       }
+      if (out.length) (ended = true), (d += 'M' + out.join('L'))
       total += at
-      if (out.length) d += 'M' + out.join('L')
     }
     return total / k > 20 * w ? { d, offset: from == null ? null : (from / k) % 5 } : { d: direct }
   })
