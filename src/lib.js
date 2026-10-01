@@ -136,4 +136,4 @@ export function legs(hops, spots) {
 
 export const city = p => p.city?.replace(/\s*\(.*\)$/, '')
 export const fmt = ms => (ms == null ? '—' : ms < 10 ? ms.toFixed(1) : String(Math.round(ms)))
-export const num = n => Math.round(n).toLocaleString('en-US')
+export const num = n => String(Math.round(n)).replace(/\B(?=(\d{3})+$)/g, ',') // toLocaleString's first call loads the number formats: a long task on a phone
