@@ -16,6 +16,16 @@ export default defineConfig({
         s.middlewares.use('/api/trace', trace)
       },
     },
+    {
+      name: 'preload-world',
+      apply: 'build',
+      // The worker's script is most of the download: it starts with the page's own, not once that
+      // has run, and the worker then takes it from the HTTP cache (server.js keeps /assets/ for good).
+      transformIndexHtml: {
+        order: 'post',
+        handler: (html, { bundle }) => [{ tag: 'link', attrs: { rel: 'modulepreload', href: '/' + Object.keys(bundle).find(f => f.startsWith('assets/land-')) }, injectTo: 'head' }],
+      },
+    },
   ],
   build: { rollupOptions: compiled },
   worker: { rollupOptions: compiled },
