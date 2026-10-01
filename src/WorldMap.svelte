@@ -1,87 +1,45 @@
 <script>
   import { untrack } from 'svelte'
-  import { geoNaturalEarth1, geoPath, geoGraticule10, geoInterpolate, geoDistance, geoStream } from 'd3-geo'
-  import { feature, mesh } from 'topojson-client'
+  import { geoNaturalEarth1, geoPath, geoInterpolate, geoDistance } from 'd3-geo'
   import { Spring } from 'svelte/motion'
   import { cubicInOut, sineInOut, backOut } from 'svelte/easing'
-  import world from 'world-atlas/countries-50m.json'
   import { ll, city, fmt } from './lib.js'
 
-  let { source, target, stops, trip, run, selected = $bindable(), hovered = $bindable() } = $props()
+  let { source, target: placed, stops, trip, run, selected = $bindable(), hovered = $bindable() } = $props()
 
   const sphere = { type: 'Sphere' }
-  const land = feature(world, world.objects.land)
-  const borders = mesh(world, world.objects.countries, (a, b) => a !== b)
-  const graticule = geoGraticule10()
   const W = 1000 // projected width of the world, in map units
   const ZOOM = [Math.log(1), Math.log(2500)] // limits of log(view width)
   const REGION = Math.log(45) // how close a selected hop is shown
-  const CELL = 100 // map units: the land comes in pieces by cell, so that drawing a view skips those off screen
 
   let w = $state(0)
   let h = $state(0)
 
   // Centered on the server, so routes leaving it rarely cross the map's edge; but routes
   // to places 110–180° west of it mostly go the other way round, over the Americas, so
-  // those center 110° east of it. Projecting the world takes a long frame, so only a
-  // target that needs the other center moves it, and nothing is drawn until one is known.
+  // those center 110° east of it. Projecting the world takes most of a second on a phone,
+  // so a worker does it, and only for a target that needs the other center; nothing is
+  // drawn until one is known. The map turns once the worker's paths are back, and shows
+  // no target until then, so that nothing is drawn on the old center and then jumps.
   let lon = $state(null)
-  $effect(() => {
+  let base = $state.raw(null)
+  let want = $derived.by(() => {
     const s = source?.lon ?? 0
     const t = run.target
     const west = t && (s - t.lon + 360) % 360
-    const to = t ? (!t.anycast && west > 110 && west <= 180 ? s + 110 : s) : (lon ?? (run.status === 'tracing' ? null : s))
-    if (to !== lon) untrack(() => recenter(to))
+    return t ? (!t.anycast && west > 110 && west <= 180 ? s + 110 : s) : (lon ?? (run.status === 'tracing' ? null : s))
   })
+  const world = new Worker(new URL('./land.js', import.meta.url), { type: 'module' })
+  world.onmessage = ({ data }) => data.lon === want && (recenter(data.lon), (base = data))
+  $effect(() => {
+    if (want !== lon) world.postMessage(want)
+  })
+  let target = $derived(want === lon ? placed : null)
   let projection = $derived(geoNaturalEarth1().rotate([-(lon ?? 0), 0]).fitWidth(W, sphere))
   let path = $derived(geoPath(projection))
-  let base = $derived(lon != null && { sphere: path(sphere), graticule: path(graticule), ...pieces() })
   let bounds = $derived(path.bounds(sphere))
   const xy = p => projection(Array.isArray(p) ? p : ll(p))
 
-  // pieces returns the land, its coast and the borders as paths, one per cell of the map
-  // they fall in. The land fills by whole parts, as the map's edge cuts it, each with the
-  // holes it holds (the Caspian); the coast and borders are cut where they cross cells.
-  function pieces() {
-    const polygons = project(land)
-    const fill = {}
-    for (const rings of polygons) {
-      const holes = rings.filter(r => area(r) < 0)
-      for (const r of rings.filter(r => area(r) > 0)) put(fill, r[0], [r, ...holes.filter(h => inside(h[0], r))].map(r => svg(r, 'Z')).join(''))
-    }
-    return { land: joined(fill), coast: cut(polygons.flat(), true), borders: cut(project(borders).flat()) }
-  }
-
-  // project returns the object's projected lines, as one group, then each polygon's rings.
-  function project(object) {
-    const groups = [[]]
-    geoStream(object, projection.stream({ polygonStart: () => groups.push([]), polygonEnd() {}, lineStart: () => groups.at(-1).push([]), lineEnd() {}, point: (x, y) => groups.at(-1).at(-1).push([x, y]) }))
-    return groups
-  }
-
-  // cut splits lines where they pass into another cell; a ring that stays in its cell stays closed.
-  function cut(lines, closed) {
-    const cells = {}
-    for (const line of lines) {
-      const pts = closed ? [...line, line[0]] : line
-      let piece = [pts[0]]
-      for (const p of pts.slice(1)) {
-        piece.push(p)
-        if (cell(p) !== cell(piece[0])) put(cells, piece[0], svg(piece)), (piece = [p])
-      }
-      if (closed && piece.length === pts.length) put(cells, line[0], svg(line, 'Z'))
-      else if (piece.length > 1) put(cells, piece[0], svg(piece))
-    }
-    return joined(cells)
-  }
-
-  const cell = ([x, y]) => Math.floor(x / CELL) * 100 + Math.floor(y / CELL)
-  const put = (cells, p, d) => (cells[cell(p)] ??= []).push(d)
-  const joined = cells => Object.values(cells).map(ds => ds.join(''))
-  const area = r => r.reduce((a, [x, y], i) => a + x * r[(i + 1) % r.length][1] - r[(i + 1) % r.length][0] * y, 0) // < 0 for a hole
-  const inside = ([x, y], r) => r.reduce((odd, [x0, y0], i) => { const [x1, y1] = r[(i + 1) % r.length]; return (y0 > y) !== (y1 > y) && x < x0 + ((y - y0) * (x1 - x0)) / (y1 - y0) ? !odd : odd }, false)
-  // as d3's geoPath writes it, to 3 decimals
-  const svg = (pts, end = '') => 'M' + pts.map(([x, y]) => `${Math.round(x * 1e3) / 1e3},${Math.round(y * 1e3) / 1e3}`).join('L') + end
   const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v))
 
   // The camera is [x, y, z]: the view's center in map units and the log of its
@@ -311,8 +269,9 @@
       ;[last, reach, arrived, packets, landed] = [run, 0, {}, [], false]
       refit = manual
     }
-    // A reader zoomed in on the last route flies back once the new one has somewhere to go.
-    if (refit && (run.target || run.status !== 'tracing')) {
+    // A reader zoomed in on the last route flies back once the new one has somewhere to go,
+    // on the map turned for it.
+    if (refit && want === lon && (run.target || run.status !== 'tracing')) {
       refit = false
       fit()
     }
