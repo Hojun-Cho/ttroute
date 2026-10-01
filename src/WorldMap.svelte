@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { geoNaturalEarth1, geoPath, geoInterpolate, geoDistance } from 'd3-geo'
   import { Spring } from 'svelte/motion'
-  import { cubicInOut, sineInOut, backOut } from 'svelte/easing'
+  import { cubicInOut, cubicOut, sineInOut, backOut } from 'svelte/easing'
   import { ll, city, fmt } from './lib.js'
 
   let { source, target: placed, stops, trip, run, selected = $bindable(), hovered = $bindable() } = $props()
@@ -386,12 +386,60 @@
   let labels = $derived(place(scene.labels, scene.stops.map(s => s.at)))
   let traffic = $derived.by(() => {
     const t = now
+    const fade = u => Math.min(1, u * 8, (1 - u) * 8)
     return packets.filter(p => t >= p.t0).map(p => {
       const u = (t - p.t0) / p.dur
       // a reply from a stop that a late host name moved past the probe waits for it
       const at = u => xy(along(p.pts, Math.max(p.len * cubicInOut(clamp(u)), p.kind === 'reply' ? p.len - reach : 0)))
-      return { kind: p.kind, fade: Math.min(1, u * 8, (1 - u) * 8), trail: [0, 1, 2, 3].map(j => at(u - j * 0.02)) }
+      // With a hop picked, flows step back as the route does, in 150 ms; those that start later, at once.
+      const from = fade((focus - p.t0) / p.dur)
+      const opacity = p.kind !== 'flow' || focus == null ? fade(u) : p.t0 >= focus ? 0.2 : from + (0.2 - from) * cubicOut(clamp((t - focus) / 150))
+      return { opacity, trail: [0, 1, 2, 3].map(j => at(u - j * 0.02)) }
     })
+  })
+
+  let focus = null // when a hop was picked, while one is
+  $effect(() => {
+    if (selected == null) focus = null
+    else focus ??= performance.now()
+  })
+
+  // Packets move every frame: drawn on a canvas between the svg's two layers, they leave the
+  // svg to be painted again only when the scene changes. Each is one group, as it was in the
+  // svg: a packet that fades is drawn on its own first, then at its opacity, so that its
+  // trail's circles overlap without adding up.
+  let canvas
+  const alone = document.createElement('canvas').getContext('2d')
+  let accent // the packets' color
+  let drawn = false
+  $effect(() => {
+    const ps = view ? traffic : []
+    if (!ps.length && !drawn) return
+    drawn = ps.length > 0
+    const r = devicePixelRatio
+    const [cw, ch] = [Math.round(w * r), Math.round(h * r)]
+    if (canvas.width !== cw || canvas.height !== ch) [canvas.width, canvas.height, alone.canvas.width, alone.canvas.height] = [cw, ch, cw, ch]
+    const pen = canvas.getContext('2d')
+    pen.clearRect(0, 0, cw, ch)
+    pen.fillStyle = alone.fillStyle = accent ??= getComputedStyle(canvas).getPropertyValue('--accent')
+    for (const p of ps) {
+      const cs = p.trail.map(([x, y], j) => [((x - view[0]) / k) * r, ((y - view[1]) / k) * r, ((j ? 2.2 : 2.8) - j * 0.45) * r]) // device px
+      const fades = p.opacity < 1
+      const [x0, y0] = [0, 1].map(i => Math.floor(Math.min(...cs.map(c => c[i] - c[2]))) - 1)
+      const [x1, y1] = [0, 1].map(i => Math.ceil(Math.max(...cs.map(c => c[i] + c[2]))) + 1)
+      const c = fades ? alone : pen
+      if (fades) alone.clearRect(x0, y0, x1 - x0, y1 - y0)
+      for (const [j, [x, y, s]] of cs.entries()) {
+        c.globalAlpha = 1 - j * 0.28
+        c.beginPath()
+        c.arc(x, y, s, 0, 2 * Math.PI)
+        c.fill()
+      }
+      if (fades) {
+        pen.globalAlpha = p.opacity
+        pen.drawImage(alone.canvas, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0)
+      }
+    }
   })
 
   function draw(t) {
@@ -516,9 +564,10 @@
 </script>
 
 <div class="map" bind:clientWidth={w} bind:clientHeight={h}>
-  <svg
+  <!-- the map's svg in two layers, with the packets on a canvas between: over the route, under the stops -->
+  <div
+    class="stage"
     bind:this={el}
-    viewBox={view?.join(' ')}
     role="img"
     aria-label="Packet route map"
     class:focus={selected}
@@ -528,104 +577,102 @@
     onpointercancel={up}
     ondblclick={e => flight || zoom(...pos(e), 0.5, false)}
   >
-    {#if view && base}
-      <g class="world">
-        <path class="sphere" d={base.sphere} />
-        <path class="graticule" d={base.graticule} />
-        {#each base.land as d}<path class="land" {d} />{/each}
-        <!-- --k restyles every path under it: only the strokes need it -->
-        <g style="--k: {k}">
-          {#each base.coast as d}<path class="coast" {d} />{/each}
-          {#each base.borders as d}<path class="borders" {d} />{/each}
+    <svg viewBox={view?.join(' ')}>
+      {#if view && base}
+        <g class="world">
+          <path class="sphere" d={base.sphere} />
+          <path class="graticule" d={base.graticule} />
+          {#each base.land as d}<path class="land" {d} />{/each}
+          <!-- --k restyles every path under it: only the strokes need it -->
+          <g style="--k: {k}">
+            {#each base.coast as d}<path class="coast" {d} />{/each}
+            {#each base.borders as d}<path class="borders" {d} />{/each}
+          </g>
         </g>
-      </g>
 
-      {#if dotted}
-        <path class="direct" d={dotted.d} stroke-dashoffset={dotted.offset} />
-      {/if}
-      <path class="route casing" d={scene.route} />
-      <path class="route" d={scene.route} />
-      {#each scene.links as l (l.kind)}
-        {@const a = arrow(l.a, l.b, l.kind)}
-        <path class="link {l.kind}" d={l.d} />
-        <path class="arrow {l.kind}" d="M-4,-4.5 L2.5,0 L-4,4.5" transform="translate({a.at}) rotate({a.angle}) scale({k})" />
-      {/each}
-
-      {#each scene.stops as s (s.i)}
-        {#if s.i && s.ripple < 1}
-          <circle class="ripple" transform="translate({s.at}) scale({k})" r={5 + 26 * s.ripple} opacity={1 - s.ripple} />
+        {#if dotted}
+          <path class="direct" d={dotted.d} stroke-dashoffset={dotted.offset} />
         {/if}
-      {/each}
+        <path class="route casing" d={scene.route} />
+        <path class="route" d={scene.route} />
+        {#each scene.links as l (l.kind)}
+          {@const a = arrow(l.a, l.b, l.kind)}
+          <path class="link {l.kind}" d={l.d} />
+          <path class="arrow {l.kind}" d="M-4,-4.5 L2.5,0 L-4,4.5" transform="translate({a.at}) rotate({a.angle}) scale({k})" />
+        {/each}
 
-      {#each traffic as p}
-        <g class={p.kind} opacity={p.fade}>
-          {#each p.trail as at, j}
-            <circle transform="translate({at}) scale({k})" r={(j ? 2.2 : 2.8) - j * 0.45} opacity={1 - j * 0.28} />
-          {/each}
-        </g>
-      {/each}
+        {#each scene.stops as s (s.i)}
+          {#if s.i && s.ripple < 1}
+            <circle class="ripple" transform="translate({s.at}) scale({k})" r={5 + 26 * s.ripple} opacity={1 - s.ripple} />
+          {/if}
+        {/each}
+      {/if}
+    </svg>
+    <canvas bind:this={canvas}></canvas>
+    <svg viewBox={view?.join(' ')}>
+      {#if view && base}
+        {#if target}
+          {#key target.lat}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <g
+              class:dest
+              transform="translate({xy(target)}) scale({k})"
+              onclick={() => dragged || !dest || (selected = selected === dest ? null : dest)}
+            >
+              <circle class="hit" r="12" />
+              <g class="target" class:reached={run.status === 'reached' || run.tcp}>
+                {#if run.status === 'tracing'}
+                  <circle class="pulse" r="6" />
+                  <circle class="pulse late" r="6" />
+                {/if}
+                <circle r="5.5" />
+              </g>
+            </g>
+          {/key}
+        {/if}
 
-      {#if target}
-        {#key target.lat}
+        {#each scene.stops as s (s.i)}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <g
-            class:dest
-            transform="translate({xy(target)}) scale({k})"
-            onclick={() => dragged || !dest || (selected = selected === dest ? null : dest)}
+            class="stop {s.role}"
+            class:source={s.i === 0}
+            class:lit={s.lit}
+            transform="translate({s.at}) scale({k})"
+            onpointerenter={e => e.pointerType === 'mouse' && (hovered = pick(s))}
+            onpointerleave={() => (hovered = null)}
+            onclick={() => dragged || (selected = selected === pick(s) ? null : pick(s))}
           >
             <circle class="hit" r="12" />
-            <g class="target" class:reached={run.status === 'reached' || run.tcp}>
-              {#if run.status === 'tracing'}
-                <circle class="pulse" r="6" />
-                <circle class="pulse late" r="6" />
-              {/if}
-              <circle r="5.5" />
-            </g>
+            <circle class="ring" r={(s.lit ? 10 : 0) * s.pop} />
+            <circle class="dot" r={(s.i === 0 ? 5.5 : 4.2) * s.pop} />
+            {#if s.i === 0}<circle class="core" r={1.6 * s.pop} />{/if}
           </g>
-        {/key}
+        {/each}
+
+        {#each labels as l (l.id)}
+          <text
+            class="label {l.kind}"
+            class:target={l.id === 'target'}
+            class:mid={l.mid}
+            transform="translate({l.at}) scale({k})"
+            x={11 * l.side}
+            y={l.mid ? -7 : 4}
+            text-anchor={l.side > 0 ? 'start' : l.side < 0 ? 'end' : 'middle'}
+          >
+            {l.text}{#if l.tag}<tspan dx="6">{l.tag}</tspan>{/if}
+          </text>
+        {/each}
+
+        {#if scene.head}
+          <g class="head" class:waiting={scene.waiting} transform="translate({scene.head}) scale({k})">
+            <circle class="casing" r="5.5" />
+            <circle class="pulse" r="5" />
+            <circle r="3.4" />
+          </g>
+        {/if}
       {/if}
-
-      {#each scene.stops as s (s.i)}
-        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <g
-          class="stop {s.role}"
-          class:source={s.i === 0}
-          class:lit={s.lit}
-          transform="translate({s.at}) scale({k})"
-          onpointerenter={e => e.pointerType === 'mouse' && (hovered = pick(s))}
-          onpointerleave={() => (hovered = null)}
-          onclick={() => dragged || (selected = selected === pick(s) ? null : pick(s))}
-        >
-          <circle class="hit" r="12" />
-          <circle class="ring" r={(s.lit ? 10 : 0) * s.pop} />
-          <circle class="dot" r={(s.i === 0 ? 5.5 : 4.2) * s.pop} />
-          {#if s.i === 0}<circle class="core" r={1.6 * s.pop} />{/if}
-        </g>
-      {/each}
-
-      {#each labels as l (l.id)}
-        <text
-          class="label {l.kind}"
-          class:target={l.id === 'target'}
-          class:mid={l.mid}
-          transform="translate({l.at}) scale({k})"
-          x={11 * l.side}
-          y={l.mid ? -7 : 4}
-          text-anchor={l.side > 0 ? 'start' : l.side < 0 ? 'end' : 'middle'}
-        >
-          {l.text}{#if l.tag}<tspan dx="6">{l.tag}</tspan>{/if}
-        </text>
-      {/each}
-
-      {#if scene.head}
-        <g class="head" class:waiting={scene.waiting} transform="translate({scene.head}) scale({k})">
-          <circle class="casing" r="5.5" />
-          <circle class="pulse" r="5" />
-          <circle r="3.4" />
-        </g>
-      {/if}
-    {/if}
-  </svg>
+    </svg>
+  </div>
 
   <div class="controls">
     <button onclick={() => zoom(w / 2, h / 2, 0.5, false)} aria-label="Zoom in">+</button>
@@ -646,17 +693,24 @@
     background: var(--paper);
   }
 
-  svg {
-    display: block;
-    width: 100%;
-    height: 100%;
+  .stage {
+    position: absolute;
+    inset: 0;
     cursor: grab;
     touch-action: none;
     user-select: none;
   }
 
-  svg:active {
+  .stage:active {
     cursor: grabbing;
+  }
+
+  svg,
+  canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   path,
@@ -731,7 +785,7 @@
   }
 
   /* A selected hop keeps its way in (ink) and way out (accent); the rest steps back. */
-  .focus :is(.route, .direct, .flow, .ripple, .stop.dim) {
+  .focus :is(.route, .direct, .ripple, .stop.dim) {
     opacity: 0.2;
     transition: opacity 0.15s;
   }
@@ -763,12 +817,6 @@
     fill: none;
     stroke: var(--accent); /* the router answers in the packet color */
     stroke-width: 1.2;
-  }
-
-  .reply circle,
-  .flow circle,
-  .probe circle {
-    fill: var(--accent);
   }
 
   .stop,
