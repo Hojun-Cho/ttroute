@@ -228,7 +228,7 @@ export function trace(req, res) {
       else if (isIP(t[i])) {
         r = hop.replies.find(x => x.ip === t[i])
         // Routers answer from their own addresses, so the anycast census only fits the destination.
-        if (!r) hop.replies.push((r = { ...geo(t[i]), anycast: t[i] === dest ? sitesOf(dest) : undefined, ms: [] }))
+        if (!r) hop.replies.push((r = { ...geo(t[i]), ...(t[i] === dest && { anycast: sitesOf(dest), dest: true }), ms: [] }))
         name(t[i])
       }
     }

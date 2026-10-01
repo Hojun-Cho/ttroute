@@ -16,7 +16,7 @@
     const out = []
     let prev = null // last row that answered
     let org // last network seen
-    let via = source // last hop placed, which later probes passed
+    let via = source // last anchor, which later probes passed (see locate)
     for (const [i, hop] of hops.entries()) {
       const r = hop.replies[0]
       if (!r) {
@@ -29,7 +29,7 @@
       if (prev && step[i] > JUMP) row.jump = `+${fmt(step[i])} ms since hop ${prev.hop.n}`
       out.push((prev = row))
       if (r.org) org = r.org
-      if (row.at && !row.at.near) via = row.at
+      if (row.at?.firm && !row.at.near) via = row.at
     }
     return out
   })

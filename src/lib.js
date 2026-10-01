@@ -3,12 +3,13 @@ import { geoDistance } from 'd3-geo'
 const EARTH_KM = 6371
 const SAME_PLACE_KM = 15 // the DB often gives one city several points a few km apart
 const NEAR_MS = 3 // a hop this little slower than a placed one is within ~300 km of it
+const AREA_KM = 50 // one city and its exchanges: Tokyo and Yokohama, San Jose and Palo Alto
 
 export const ll = p => [p.lon, p.lat]
 export const km = (a, b) => geoDistance(ll(a), ll(b)) * EARTH_KM
 
 // Light in fiber covers about 100 km per millisecond of round trip. The probe
-// passed `via`, the last hop placed, and the reply came back at best straight,
+// passed `via`, the last anchor (see locate), and the reply came back at best straight,
 // so a place farther than that loop allows is anycast or mislocated.
 export const reachKm = ms => ms * 100 + 300 // slack for DB error at the source
 const fits = (p, ms, source, via) =>
@@ -21,7 +22,7 @@ export const tooFar = (r, source, via) => r.lat != null && !fits(r, Math.min(...
 export function place(r, name, source, via) {
   const ms = Math.min(...r.ms)
   // An anycast address answers from its site nearest the path, which is
-  // taken to be the known site nearest the last hop placed that fits the RTT.
+  // taken to be the known site nearest `via` that fits the RTT.
   if (r.anycast && via) {
     const site = r.anycast
       .map(([city, cc, lat, lon]) => ({ city, cc, lat, lon }))
@@ -32,8 +33,11 @@ export function place(r, name, source, via) {
   if (name?.place && fits(name.place, ms, source, via)) return { ...name.place, from: 'host name' }
   if (r.ipmap && fits(r.ipmap, ms, source, via)) return { ...r.ipmap, from: 'RIPE IPmap' }
   // The database misplaces backbone routers often enough that its city must also be
-  // reachable in the time added since the last hop placed, not only from the source.
-  if (r.lat != null && fits(r, ms, source, via) && (!via || km(via, r) <= reachKm(Math.max(0, ms - (via.ms ?? 0)))))
+  // reachable in the time added since `via`, not only from the source. The destination,
+  // which it gets right far more often, is held to that only by a sure `via`: one placed
+  // wrongly, or slow to answer, would rule its right city out.
+  const step = !via || km(via, r) <= reachKm(Math.max(0, ms - (via.ms ?? 0)))
+  if (r.lat != null && fits(r, ms, source, via) && (step || (r.dest && !via.sure)))
     return { city: city(r), cc: r.cc, lat: r.lat, lon: r.lon, from: 'database' }
   return null
 }
@@ -45,13 +49,23 @@ export const rtt = hop => {
 
 // locate returns each hop's place, in hop order: a reply's host name or database
 // city when its RTT allows, else, if the hop answered barely later than the
-// last hop placed that way, near that one. Estimates never anchor others.
+// last anchor, near that one. A hop placed is firm, and anchors the later ones,
+// unless it is a database city away from the last anchor's area: few routers that
+// move the route are where the database says. An anchor is sure when its host name
+// placed it, or it stayed in the last one's area and answered barely later.
 export function locate(source, hops, names) {
   let last = source?.lat != null ? { city: city(source), cc: source.cc, lat: source.lat, lon: source.lon, n: 0, ms: 0 } : null
   return hops.map(h => {
     for (const r of h.replies) {
       const p = place(r, names[r.ip], source, last)
-      if (p) return (last = { ...p, n: h.n, ms: Math.min(...r.ms) })
+      if (!p) continue
+      const ms = Math.min(...r.ms)
+      const stays = last && km(last, p) <= AREA_KM
+      const firm = p.from !== 'database' || stays
+      const sure = p.from === 'host name' || (stays && ms - last.ms <= NEAR_MS)
+      const spot = { ...p, n: h.n, ms, firm, sure }
+      if (firm) last = spot
+      return spot
     }
     const ms = rtt(h)
     return ms != null && last && ms - last.ms <= NEAR_MS ? { ...last, near: true, lag: Math.max(0, ms - last.ms) } : null
@@ -73,7 +87,6 @@ export function route(source, spots) {
   return stops
 }
 
-const AREA_KM = 50 // one city and its exchanges: Tokyo and Yokohama, San Jose and Palo Alto
 const LONG_MS = 60 // a step this big is a long link: an ocean, or a continent coast to coast
 
 // steps returns what each answered hop adds to the round trip of the one before it,
