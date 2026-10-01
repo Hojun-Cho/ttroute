@@ -92,9 +92,11 @@
   }
 
   // Keep the live row in view while tracing, unless the reader is on a hop or a leg.
-  // Desktop only: on phones the page itself scrolls.
+  // Desktop only: on phones the page itself scrolls. Asked of a media query: on a phone,
+  // reading innerWidth lays out the whole page, on every hop.
+  const wide = matchMedia('(width > 860px)')
   $effect(() => {
-    if (hops.length && innerWidth > 860 && untrack(() => selected == null && hovered == null && leg == null))
+    if (hops.length && wide.matches && untrack(() => selected == null && hovered == null && leg == null))
       document.querySelector('.legs > li:last-child')?.scrollIntoView({ block: 'nearest' })
   })
 </script>
