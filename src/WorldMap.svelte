@@ -55,6 +55,46 @@
   })
   let k = $derived(view ? view[2] / w : 1) // map units per px
 
+  // The dotted straight line is dotted along its whole length at every redraw: tens of
+  // thousands of dots at close zoom. Once it is 20 views long, it is cut to the view and a
+  // margin, with the dash offset that keeps each dot where it is on the whole line (dots are
+  // 5 px apart). Where the map's edge cuts it in two, only one piece can meet so close a view.
+  let direct = $derived(target && stops.length ? path({ type: 'LineString', coordinates: [ll(stops[0]), ll(target)] }) : null)
+  let pieces = $derived(direct?.slice(1).split('M').map(l => l.split('L').map(p => p.split(',').map(Number))) ?? []) // the points d3 drew
+  let dotted = $derived.by(() => {
+    if (!view || !direct) return null
+    const [vx, vy, vw, vh] = view
+    const [x0, y0, x1, y1] = [vx - vw / 4, vy - vh / 4, vx + vw * 1.25, vy + vh * 1.25]
+    let d = ''
+    let total = 0
+    let from // map units along its piece to where the part in view starts
+    for (const pts of pieces) {
+      const out = []
+      let at = 0
+      for (let i = 1; i < pts.length; i++) {
+        const [[ax, ay], [bx, by]] = [pts[i - 1], pts[i]]
+        const [dx, dy] = [bx - ax, by - ay]
+        const len = Math.hypot(dx, dy)
+        // the part of this segment inside the box, as [t0, t1] along it (Liang–Barsky)
+        let t0 = 0
+        let t1 = 1
+        for (const [p, q] of [[-dx, ax - x0], [dx, x1 - ax], [-dy, ay - y0], [dy, y1 - ay]]) {
+          if (p === 0) t1 = q < 0 ? -1 : t1
+          else if (p < 0) t0 = Math.max(t0, q / p)
+          else t1 = Math.min(t1, q / p)
+        }
+        if (t0 < t1) {
+          if (!out.length) (from ??= at + t0 * len), out.push([ax + t0 * dx, ay + t0 * dy])
+          out.push([ax + t1 * dx, ay + t1 * dy])
+        }
+        at += len
+      }
+      total += at
+      if (out.length) d += 'M' + out.join('L')
+    }
+    return total / k > 20 * w ? { d, offset: from == null ? null : (from / k) % 5 } : { d: direct }
+  })
+
   // Until the reader moves the map, it frames the route and destination, or the
   // world before there is one. A destination with no place yet (anycast before it
   // answers, or one the database or port 443 can't place) keeps the world in view:
@@ -500,8 +540,8 @@
         </g>
       </g>
 
-      {#if target && stops.length}
-        <path class="direct" d={path({ type: 'LineString', coordinates: [ll(stops[0]), ll(target)] })} />
+      {#if dotted}
+        <path class="direct" d={dotted.d} stroke-dashoffset={dotted.offset} />
       {/if}
       <path class="route casing" d={scene.route} />
       <path class="route" d={scene.route} />
