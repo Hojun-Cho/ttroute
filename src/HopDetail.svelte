@@ -1,5 +1,5 @@
 <script>
-  import { city, fmt, km, num, place, reachKm, tooFar } from './lib.js'
+  import { city, fmt, km, num, place, tooFar } from './lib.js'
 
   // One hop as the exchange it was: who answered the probes sent with this
   // TTL, with what, and what is known about them. `last` is past `hop.n` for
@@ -54,10 +54,13 @@
         {p.city}, {p.cc}<small>{p.from}{source?.lat != null ? ` · ${num(km(source, p))} km away` : ''}</small>
       </dd>
     {/if}
-    {#if tooFar(r, source, via)}
+    <!-- The destination's database city shows even where only the time since via ruled it out. It is
+         struck only where the round trip alone does: anything through via rests on via's place. -->
+    {#if tooFar(r, source, via) || (r.dest && r.lat != null && (!p || p.near))}
+      {@const far = tooFar(r, source, source)}
       <dt>Database</dt>
       <dd>
-        {city(r) ?? r.country}<small>too far: {fmt(min)} ms reaches ≤ {num(reachKm(min))} km{via?.n ? ` via ${via.city}` : ''}</small>
+        <span class="db" class:far>{city(r) ?? r.country}, {r.cc}</span><small>{far ? `too far for ${fmt(min)} ms` : `too far from ${via.city}`}</small>
       </dd>
     {/if}
   </dl>
@@ -111,6 +114,14 @@
   p {
     padding-left: calc(var(--label) + var(--gap));
     color: var(--ink-2);
+  }
+
+  .db {
+    color: var(--ink-2);
+  }
+
+  .far {
+    text-decoration: line-through;
   }
 
   .mono {

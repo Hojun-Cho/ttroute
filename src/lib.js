@@ -11,7 +11,7 @@ export const km = (a, b) => geoDistance(ll(a), ll(b)) * EARTH_KM
 // Light in fiber covers about 100 km per millisecond of round trip. The probe
 // passed `via`, the last anchor (see locate), and the reply came back at best straight,
 // so a place farther than that loop allows is anycast or mislocated.
-export const reachKm = ms => ms * 100 + 300 // slack for DB error at the source
+const reachKm = ms => ms * 100 + 300 // slack for DB error at the source
 const fits = (p, ms, source, via) =>
   source?.lat == null || km(source, via) + km(via, p) + km(p, source) <= 2 * reachKm(ms)
 export const tooFar = (r, source, via) => r.lat != null && !fits(r, Math.min(...r.ms), source, via)

@@ -69,7 +69,7 @@
       x.entered && short(x.r.org),
       x.r.ip === run.target?.ip && (run.me ? 'you' : 'destination'),
       x.r.anycast && `anycast, ${x.r.anycast.length} sites`,
-      (!x.at || x.at.near) && tooFar(x.r, source, x.via) && `not ${city(x.r)}: too fast`,
+      (!x.at || x.at.near) && tooFar(x.r, source, source) && `not ${city(x.r)}: too far`,
       x.jump,
     ]
       .filter(Boolean)
