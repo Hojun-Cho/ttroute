@@ -20,7 +20,9 @@
   // those center 110° east of it. Projecting the world takes most of a second on a phone,
   // so a worker does it, and only for a target that needs the other center; nothing is
   // drawn until one is known. The map turns once the worker's paths are back, and shows
-  // no target until then, so that nothing is drawn on the old center and then jumps.
+  // no target until then, so that nothing is drawn on the old center and then jumps. Until
+  // the first paths, the probe waits at the server, the camera keeps the world in view and a
+  // picked hop waits for its flight, or they would set off unseen on a stand-in map.
   let lon = $state(null)
   let base = $state.raw(null)
   let want = $derived.by(() => {
@@ -102,7 +104,7 @@
   // and the view would swing in and out.
   let manual = $state(false)
   let frame = $derived.by(() => {
-    const pts = (target ? [...stops, target] : run.status === 'tracing' ? [] : stops).map(xy)
+    const pts = (target ? [...stops, target] : run.status === 'tracing' || !base ? [] : stops).map(xy)
     const [[x0, y0], [x1, y1]] =
       pts.length > 1
         ? [[Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1]))], [Math.max(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1]))]]
@@ -155,7 +157,7 @@
   // goal is a string so that the effect re-runs only when a late host name moves
   // the hop, not on every new hop, which would pull back a reader who panned away.
   let goal = $derived.by(() => {
-    const near = selected ? around(selected) : []
+    const near = selected && base ? around(selected) : []
     const s = near.find(s => s.hops.includes(selected)) ?? near[0]
     return s && `${s.lon} ${s.lat}`
   })
@@ -163,7 +165,7 @@
     const n = selected
     goal
     untrack(() => {
-      const near = n ? around(n) : []
+      const near = n && base ? around(n) : []
       const s = near.find(s => s.hops.includes(n)) ?? near[0]
       if (!s || s === flight?.s) return // already on the way there; a new trip would start from rest
       const [x, y] = xy(s)
@@ -334,7 +336,7 @@
     const total = stops.at(-1)?.d ?? 0
     // Hurry when behind. Once the probe is at a destination that answered, a late
     // host name that moves a stop redraws the route without sending the probe out again.
-    reach = landed ? total : Math.min(total, reach + Math.max(1.2, (total - reach) * 6) * dt)
+    reach = landed ? total : base ? Math.min(total, reach + Math.max(1.2, (total - reach) * 6) * dt) : 0
     landed = run.status === 'reached' && reach === total
     for (const [i, s] of stops.entries()) {
       if (s.d > reach) break
