@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
+// Chrome compiles a script with this hint while it streams in, not each function on its first
+// call: the list's code on the first tap, the world's in the worker's first reply.
+const compiled = { output: { postBanner: '//# allFunctionsCalledOnLoad' } } // after minifying, which drops a plain banner
+
 export default defineConfig({
   plugins: [
     svelte(),
@@ -13,5 +17,6 @@ export default defineConfig({
       },
     },
   ],
-  build: { chunkSizeWarningLimit: 1000 }, // the 1:50m world map is most of it
+  build: { rollupOptions: compiled },
+  worker: { rollupOptions: compiled },
 })
